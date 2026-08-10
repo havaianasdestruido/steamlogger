@@ -1,0 +1,13 @@
+/target
+
+# local config + output log (never commit real API keys or personal logs)
+steamlogger.toml
+steamlog.json
+*.log.json
+
+# editor/OS cruft
+.idea/
+.vscode/
+*.swp
+Thumbs.db
+.DS_Store
