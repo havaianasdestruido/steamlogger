@@ -1,0 +1,21 @@
+# SteamLogger example configuration.
+# Copy this file to `steamlogger.toml` next to the binary and edit the values.
+
+# Steam Web API key. Required.
+# Get one at https://steamcommunity.com/dev/apikey
+# May be overridden by the STEAMLOGGER_API_KEY environment variable.
+api_key = "YOUR_STEAM_API_KEY"
+
+# Numeric SteamID64 of the tracked user. Required.
+# Find yours at https://steamid.io or in your Steam profile URL's vanity lookup.
+# May be overridden by the STEAMLOGGER_STEAM_ID environment variable.
+steam_id = 76561198000000000
+
+# Seconds between polls of the Steam API. Optional, defaults to 30.
+poll_interval_secs = 30
+
+# Path of the JSON log file written by the app. Optional, defaults to "steamlog.json".
+output_file = "steamlog.json"
+
+# Whether to collect friends/lobby/map enrichment data. Optional, defaults to true.
+enrich = true

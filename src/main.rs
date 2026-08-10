@@ -19,7 +19,10 @@ fn main() -> ExitCode {
     let config = match config::load(&config_path) {
         Ok(c) => c,
         Err(e) => {
-            eprintln!("failed to load config from {}: {e:#}", config_path.display());
+            eprintln!(
+                "failed to load config from {}: {e:#}",
+                config_path.display()
+            );
             eprintln!("copy steamlogger.example.toml to steamlogger.toml and fill it in");
             return ExitCode::FAILURE;
         }

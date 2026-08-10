@@ -1,0 +1,61 @@
+{
+  "response": {
+    "players": [
+      {
+        "steamid": "76561198000000000",
+        "personaname": "rocketjumper42",
+        "communityvisibilitystate": 3,
+        "profilestate": 1,
+        "commentpermission": 1,
+        "profileurl": "https://steamcommunity.com/id/rocketjumper42/",
+        "avatar": "https://avatars.steamstatic.com/abc.jpg",
+        "avatarmedium": "https://avatars.steamstatic.com/abc_medium.jpg",
+        "avatarfull": "https://avatars.steamstatic.com/abc_full.jpg",
+        "avatarhash": "abc",
+        "lastlogoff": 1754320000,
+        "personastate": 1,
+        "primaryclanid": "103582791429521408",
+        "timecreated": 1389841200,
+        "personastateflags": 0,
+        "gameextrainfo": "Team Fortress 2",
+        "gameid": "440",
+        "lobbysteamid": "109775241716070123",
+        "gameserverip": "85.190.8.1:27015",
+        "gamedir": "tf"
+      },
+      {
+        "steamid": "76561198000000001",
+        "personaname": "medicmain99",
+        "communityvisibilitystate": 3,
+        "profilestate": 1,
+        "profileurl": "https://steamcommunity.com/id/medicmain99/",
+        "avatar": "https://avatars.steamstatic.com/def.jpg",
+        "avatarmedium": "https://avatars.steamstatic.com/def_medium.jpg",
+        "avatarfull": "https://avatars.steamstatic.com/def_full.jpg",
+        "lastlogoff": 1754320100,
+        "personastate": 1,
+        "personastateflags": 0,
+        "gameextrainfo": "Team Fortress 2",
+        "gameid": "440",
+        "lobbysteamid": "109775241716070123",
+        "gameserverip": "85.190.8.1:27015",
+        "gamedir": "tf"
+      },
+      {
+        "steamid": "76561198000000002",
+        "personaname": "awp_king",
+        "communityvisibilitystate": 3,
+        "profilestate": 1,
+        "profileurl": "https://steamcommunity.com/id/awp_king/",
+        "avatar": "https://avatars.steamstatic.com/ghi.jpg",
+        "avatarmedium": "https://avatars.steamstatic.com/ghi_medium.jpg",
+        "avatarfull": "https://avatars.steamstatic.com/ghi_full.jpg",
+        "lastlogoff": 1754320200,
+        "personastate": 1,
+        "personastateflags": 0,
+        "gameextrainfo": "Counter-Strike 2",
+        "gameid": "730"
+      }
+    ]
+  }
+}

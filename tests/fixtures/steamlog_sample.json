@@ -1,0 +1,17 @@
+{
+  "games": [
+    {
+      "name": "Team Fortress 2",
+      "start": "2026-08-10T14:32:15-03:00",
+      "end": "2026-08-10T16:47:03-03:00",
+      "map": "cp_dustbowl",
+      "server": "vanilla.steamlogger.dev:27015",
+      "friends_playing": ["medicmain99"],
+      "friends_in_lobby": ["medicmain99"]
+    },
+    {
+      "name": "Counter-Strike 2",
+      "start": "2026-08-10T17:01:22-03:00"
+    }
+  ]
+}

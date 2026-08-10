@@ -1,4 +1,4 @@
-use crate::model::GameLog;
+use crate::model::{GameLog, LogEntry};
 use crate::steam::api::CurrentGame;
 
 /// What happened during one poll tick.
@@ -25,11 +25,11 @@ pub struct Tracker {
 
 impl Tracker {
     pub fn new(log: GameLog) -> Self {
-        // TODO(subagent tracker): if last entry has end == None, set active_index.
-        Self {
-            log,
-            active_index: None,
-        }
+        let active_index = log.games.last().and_then(|last| match last.end {
+            Some(_) => None,
+            None => log.games.len().checked_sub(1),
+        });
+        Self { log, active_index }
     }
 
     pub fn into_log(self) -> GameLog {
@@ -50,16 +50,38 @@ impl Tracker {
     /// - active + different game -> close old, push new, `Started`
     /// - active + none -> close old, `Ended`
     pub fn update(&mut self, game: &CurrentGame, now: &str) -> SessionEvent {
-        // TODO(subagent tracker): implement the state machine.
-        let _ = (game, now);
-        SessionEvent::Idle
+        match self.active_index {
+            None => {
+                self.log
+                    .games
+                    .push(LogEntry::new(game.name.clone(), now.to_string()));
+                let index = self.log.games.len() - 1;
+                self.active_index = Some(index);
+                SessionEvent::Started(index)
+            }
+            Some(index) if self.log.games[index].name == game.name => SessionEvent::Running(index),
+            Some(index) => {
+                self.close_at(index, now);
+                self.log
+                    .games
+                    .push(LogEntry::new(game.name.clone(), now.to_string()));
+                let new_index = self.log.games.len() - 1;
+                self.active_index = Some(new_index);
+                SessionEvent::Started(new_index)
+            }
+        }
     }
 
     /// Explicitly close the active session (used when the poll reports no game).
     pub fn end_active(&mut self, now: &str) -> SessionEvent {
-        // TODO(subagent tracker): set end on active entry, clear active_index.
-        let _ = now;
-        SessionEvent::Idle
+        match self.active_index {
+            Some(index) => {
+                self.close_at(index, now);
+                self.active_index = None;
+                SessionEvent::Ended
+            }
+            None => SessionEvent::Idle,
+        }
     }
 
     /// Attach enrichment data to entry `index`. Empty friend lists are stored
@@ -72,9 +94,23 @@ impl Tracker {
         friends_playing: &[String],
         friends_in_lobby: &[String],
     ) -> anyhow::Result<()> {
-        // TODO(subagent tracker): set optional fields on log.games[index].
-        let _ = (index, map, server, friends_playing, friends_in_lobby);
+        let entry = self
+            .log
+            .games
+            .get_mut(index)
+            .ok_or_else(|| anyhow::anyhow!("entry index {} out of bounds", index))?;
+        entry.map = map.map(str::to_string);
+        entry.server = server.map(str::to_string);
+        entry.friends_playing = (!friends_playing.is_empty()).then(|| friends_playing.to_vec());
+        entry.friends_in_lobby = (!friends_in_lobby.is_empty()).then(|| friends_in_lobby.to_vec());
         Ok(())
+    }
+
+    fn close_at(&mut self, index: usize, now: &str) {
+        let entry = &mut self.log.games[index];
+        if entry.end.is_none() {
+            entry.end = Some(now.to_string());
+        }
     }
 }
 
@@ -82,9 +118,142 @@ impl Tracker {
 mod tests {
     use super::*;
 
+    fn game(name: &str) -> CurrentGame {
+        CurrentGame {
+            app_id: 0,
+            name: name.to_string(),
+            gamedir: None,
+            lobby_steam_id: None,
+            gameserver_ip: None,
+        }
+    }
+
     #[test]
     fn empty_tracker_starts_idle() {
         let t = Tracker::new(GameLog::default());
         assert!(t.active_index().is_none());
+    }
+
+    #[test]
+    fn start() {
+        let mut t = Tracker::new(GameLog::default());
+        assert_eq!(t.update(&game("Dota 2"), "T0"), SessionEvent::Started(0));
+        assert_eq!(t.active_index(), Some(0));
+        let entries = &t.log().games;
+        assert_eq!(entries.len(), 1);
+        assert_eq!(entries[0].name, "Dota 2");
+        assert_eq!(entries[0].start, "T0");
+        assert!(entries[0].end.is_none());
+    }
+
+    #[test]
+    fn running() {
+        let mut t = Tracker::new(GameLog::default());
+        t.update(&game("Dota 2"), "T0");
+        assert_eq!(t.update(&game("Dota 2"), "T1"), SessionEvent::Running(0));
+        assert_eq!(t.active_index(), Some(0));
+        assert_eq!(t.log().games.len(), 1);
+        assert!(t.log().games[0].end.is_none());
+    }
+
+    #[test]
+    fn switch() {
+        let mut t = Tracker::new(GameLog::default());
+        t.update(&game("Dota 2"), "T0");
+        assert_eq!(t.update(&game("CS2"), "T1"), SessionEvent::Started(1));
+        assert_eq!(t.active_index(), Some(1));
+        let entries = &t.log().games;
+        assert_eq!(entries.len(), 2);
+        assert_eq!(entries[0].end.as_deref(), Some("T1"));
+        assert_eq!(entries[1].name, "CS2");
+        assert_eq!(entries[1].start, "T1");
+        assert!(entries[1].end.is_none());
+    }
+
+    #[test]
+    fn end() {
+        let mut t = Tracker::new(GameLog::default());
+        t.update(&game("Dota 2"), "T0");
+        assert_eq!(t.end_active("T2"), SessionEvent::Ended);
+        assert_eq!(t.active_index(), None);
+        assert_eq!(t.log().games[0].end.as_deref(), Some("T2"));
+        assert_eq!(t.end_active("T3"), SessionEvent::Idle);
+        assert_eq!(t.log().games[0].end.as_deref(), Some("T2"));
+    }
+
+    #[test]
+    fn resume() {
+        let mut log = GameLog::default();
+        log.games
+            .push(LogEntry::new("Dota 2".to_string(), "T0".to_string()));
+        let mut t = Tracker::new(log);
+        assert_eq!(t.active_index(), Some(0));
+        assert_eq!(t.update(&game("Dota 2"), "T1"), SessionEvent::Running(0));
+        assert_eq!(t.log().games.len(), 1);
+        assert_eq!(t.end_active("T2"), SessionEvent::Ended);
+        assert_eq!(t.log().games[0].end.as_deref(), Some("T2"));
+        assert_eq!(t.active_index(), None);
+    }
+
+    #[test]
+    fn closed_last_entry_not_resumed() {
+        let mut log = GameLog::default();
+        log.games
+            .push(LogEntry::new("Dota 2".to_string(), "T0".to_string()));
+        log.games[0].end = Some("T1".to_string());
+        let t = Tracker::new(log);
+        assert_eq!(t.active_index(), None);
+    }
+
+    #[test]
+    fn apply_meta() {
+        let mut t = Tracker::new(GameLog::default());
+        t.update(&game("Dota 2"), "T0");
+        t.apply_meta(
+            0,
+            Some("dota"),
+            Some("1.2.3.4:27015"),
+            &["alice".to_string(), "bob".to_string()],
+            &[],
+        )
+        .unwrap();
+        let e = &t.log().games[0];
+        assert_eq!(e.map.as_deref(), Some("dota"));
+        assert_eq!(e.server.as_deref(), Some("1.2.3.4:27015"));
+        assert_eq!(
+            e.friends_playing.as_deref(),
+            Some(&["alice".to_string(), "bob".to_string()][..])
+        );
+        assert!(e.friends_in_lobby.is_none());
+
+        t.apply_meta(0, None, None, &[], &["carol".to_string()])
+            .unwrap();
+        let e = &t.log().games[0];
+        assert!(e.map.is_none());
+        assert!(e.server.is_none());
+        assert!(e.friends_playing.is_none());
+        assert_eq!(
+            e.friends_in_lobby.as_deref(),
+            Some(&["carol".to_string()][..])
+        );
+    }
+
+    #[test]
+    fn apply_meta_out_of_bounds() {
+        let mut t = Tracker::new(GameLog::default());
+        let err = t.apply_meta(3, None, None, &[], &[]).unwrap_err();
+        assert!(err.to_string().contains("out of bounds"));
+    }
+
+    #[test]
+    fn into_log_returns_underlying() {
+        let mut t = Tracker::new(GameLog::default());
+        t.update(&game("Dota 2"), "T0");
+        t.end_active("T1");
+        let log = t.into_log();
+        assert_eq!(log.games.len(), 1);
+        assert_eq!(log.games[0].name, "Dota 2");
+        assert_eq!(log.games[0].start, "T0");
+        assert_eq!(log.games[0].end.as_deref(), Some("T1"));
     }
 }
