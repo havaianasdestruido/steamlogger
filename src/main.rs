@@ -34,7 +34,10 @@ fn main() -> ExitCode {
 fn run(config: &config::Config) -> ExitCode {
     let client = SteamClient::new(config.api_key.clone());
     let mut a2s = A2sClient::new();
-    let mut tracker = Tracker::new(storage::read_log(&config.output_file).unwrap_or_default());
+    let mut tracker = Tracker::with_missed_tolerance(
+        storage::read_log(&config.output_file).unwrap_or_default(),
+        config.missed_poll_tolerance,
+    );
     let interval = Duration::from_secs(config.poll_interval_secs.max(5));
 
     let (tx, rx) = mpsc::channel::<()>();
@@ -57,7 +60,7 @@ fn run(config: &config::Config) -> ExitCode {
 
         match client.current_game(config.steam_id) {
             Ok(Some(game)) => {
-                let _event = tracker.update(&game, &now());
+                let _event = tracker.observe(Some(&game), &now());
                 if config.enrich {
                     let info = enrich::analyze(&client, &mut a2s, config.steam_id, &game);
                     if let Some(idx) = tracker.active_index() {
@@ -74,7 +77,7 @@ fn run(config: &config::Config) -> ExitCode {
                 }
             }
             Ok(None) => {
-                let _event = tracker.end_active(&now());
+                let _event = tracker.observe(None, &now());
             }
             Err(e) => eprintln!("poll error: {e}"),
         }
