@@ -1,5 +1,16 @@
 # SteamLogger
 
+## Star History
+
+<a href="https://www.star-history.com/?repos=havaianasdestruido%2Fsteamlogger&type=date&legend=top-left">
+ <picture>
+   <source media="(prefers-color-scheme: dark)" srcset="https://api.star-history.com/chart?repos=havaianasdestruido/steamlogger&type=date&theme=dark&legend=top-left" />
+   <source media="(prefers-color-scheme: light)" srcset="https://api.star-history.com/chart?repos=havaianasdestruido/steamlogger&type=date&legend=top-left" />
+   <img alt="Star History Chart" src="https://api.star-history.com/chart?repos=havaianasdestruido/steamlogger&type=date&legend=top-left" />
+ </picture>
+</a>
+
+
 Rust app that logs every Steam game session to a JSON file, with optional
 enrichment: **friends playing the same game**, **friends in your same lobby**,
 and the **server name + current map** you are playing on.
