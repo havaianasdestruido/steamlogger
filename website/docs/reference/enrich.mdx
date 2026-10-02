@@ -1,0 +1,193 @@
+---
+id: enrich
+title: steamlogger::enrich
+sidebar_label: enrich
+sidebar_position: 5
+description: API reference for the enrich module — Enrichment, analyze, same_game_friends, lobby_friends and server_and_map.
+---
+
+# `steamlogger::enrich`
+
+<SourceLink path="src/enrich.rs" lines={190} />
+
+Turns raw Steam summaries and A2S replies into the optional fields of a log
+entry. The matching functions are pure and unit-tested; only
+[`analyze`](#analyze) performs I/O, and it is **infallible by design** —
+failures become empty data, never errors.
+
+```rust
+use steamlogger::enrich::{self, Enrichment};
+```
+
+Narrative version: [Enrichment pipeline](../architecture/enrichment-pipeline.mdx).
+
+## Types
+
+### `Enrichment` {/* #enrichment */}
+
+```rust
+#[derive(Debug, Clone, Default, PartialEq)]
+pub struct Enrichment {
+    pub map: Option<String>,
+    pub server: Option<String>,
+    pub friends_playing: Vec<String>,
+    pub friends_in_lobby: Vec<String>,
+}
+```
+
+Everything one tick could discover about an in-progress session.
+
+| Field | Empty value | Source |
+| --- | --- | --- |
+| `map` | `None` | A2S_INFO reply |
+| `server` | `None` | A2S_INFO reply |
+| `friends_playing` | `[]` | [`same_game_friends`](#same_game_friends) |
+| `friends_in_lobby` | `[]` | [`lobby_friends`](#lobby_friends) |
+
+Note the asymmetry: the server fields are `Option`, the friend lists are plain
+`Vec`. `Tracker::apply_meta` is what converts an empty `Vec` into `None` for
+serialisation. `Enrichment::default()` — all empty — is the value returned
+whenever a Steam call fails.
+
+## Functions
+
+### `analyze` {/* #analyze */}
+
+```rust
+pub fn analyze(
+    client: &SteamClient,
+    a2s: &mut A2sClient,
+    me: u64,
+    game: &CurrentGame,
+) -> Enrichment
+```
+
+Collect all enrichment for a running game. Never returns an error.
+
+```rust
+let Ok(friends) = client.friends(me) else { return Enrichment::default(); };
+let ids: Vec<u64> = friends.iter().map(|f| f.steam_id).collect();
+let Ok(summaries) = client.summaries(&ids) else { return Enrichment::default(); };
+let (server, map) = server_and_map(a2s, game);
+build(&summaries, game, map, server)
+```
+
+| Step | Call | On failure |
+| --- | --- | --- |
+| 1 | `client.friends(me)` — `GetFriendList` | return `Enrichment::default()` |
+| 2 | `client.summaries(&ids)` — batched `GetPlayerSummaries` | return `Enrichment::default()` |
+| 3 | `server_and_map(a2s, game)` | `(None, None)`, other fields kept |
+| 4 | `build(...)` | — |
+
+:::note An early failure costs the server fields too
+Steps 1 and 2 return before the A2S query runs, so a Steam outage also drops
+`map`/`server` for that tick even though the game server might have answered.
+This keeps the function to a single linear path; the next tick retries
+everything.
+:::
+
+**Cost**: `1 + ceil(friends / 100)` HTTPS requests plus at most one UDP
+round trip (two datagrams if the server issues a challenge).
+
+### `same_game_friends` {/* #same_game_friends */}
+
+```rust
+pub fn same_game_friends(summaries: &[PlayerSummary], game: &CurrentGame) -> Vec<String>
+```
+
+Persona names of everyone in `summaries` whose `game_id` equals
+`game.app_id` — sorted, then de-duplicated.
+
+- Matching is on **AppID**, so titles and localisation do not matter.
+- `sort()` then `dedup()` means duplicates are fully removed (not just
+  consecutive ones), so two friends sharing a persona name collapse to one.
+- Summaries with no `game_id` (idle, or private game details) never match.
+- The tracked account is not in its own friend list, so you never appear here.
+
+```rust
+// zed and alpha are both in app 440; bravo is in 730; delta is idle
+assert_eq!(same_game_friends(&summaries, &game), vec!["alpha", "zed"]);
+```
+
+### `lobby_friends` {/* #lobby_friends */}
+
+```rust
+pub fn lobby_friends(summaries: &[PlayerSummary], game: &CurrentGame) -> Vec<String>
+```
+
+Persona names of everyone whose `lobby_steam_id` equals the tracked player's —
+sorted and de-duplicated.
+
+```rust
+let Some(lobby) = game.lobby_steam_id.as_deref() else { return Vec::new(); };
+```
+
+- Returns an empty vector immediately when **you** are not in a Steam lobby.
+- Exact string comparison on the opaque `lobbysteamid` value.
+- Not filtered by game: a shared lobby ID already implies the same game.
+- Games that do not use Steam matchmaking never report a lobby, so this stays
+  empty for them — see the
+  [limits](../architecture/enrichment-pipeline.mdx#friends-same-lobby).
+
+### `server_and_map` {/* #server_and_map */}
+
+```rust
+pub fn server_and_map(a2s: &mut A2sClient, game: &CurrentGame) -> (Option<String>, Option<String>)
+```
+
+Resolve the game server Steam reported into `(server_name, map)`.
+
+| Condition | Result |
+| --- | --- |
+| `game.gameserver_ip` is `None` | `(None, None)` — no query is sent |
+| Query succeeds | `(Some(info.name), Some(info.map))` |
+| Query fails (timeout, unreachable, malformed, repeated challenge) | `(None, None)` — the error is discarded |
+
+:::caution Mind the tuple order
+The return value is **(server, map)**, while
+[`Tracker::apply_meta`](./tracker.mdx#apply_meta) takes **map first**. The call
+site in `analyze` destructures accordingly:
+
+```rust
+let (server, map) = server_and_map(a2s, game);
+build(&summaries, game, map, server)
+```
+:::
+
+### `build` *(private)* {/* #build */}
+
+```rust
+fn build(
+    summaries: &[PlayerSummary],
+    game: &CurrentGame,
+    map: Option<String>,
+    server: Option<String>,
+) -> Enrichment
+```
+
+Assembles the struct by calling the two matching functions. Kept separate from
+`analyze` so the assembly logic can be unit-tested without any client — see
+`build_assembles_enrichment`.
+
+## Tests
+
+6 unit tests in `src/enrich.rs`, plus `enrich_same_lobby_from_fixture` in the
+integration suite (which runs the matchers over the recorded
+`player_summaries.json` fixture).
+
+| Test | Asserts |
+| --- | --- |
+| `no_friends_plays_nothing` | Empty input → empty output for both matchers |
+| `same_game_friends_filters_sorts_dedupes` | Filtering by AppID, alphabetical order, duplicates removed |
+| `lobby_friends_matches_same_lobby` | Only exact lobby matches, sorted and deduped |
+| `lobby_friends_ignored_when_no_lobby` | No lobby for the player → empty |
+| `no_gameserver_ip_yields_no_server_or_map` | No address → no UDP query |
+| `build_assembles_enrichment` | Full `Enrichment` assembled from parts |
+| `enrich_same_lobby_from_fixture` *(integration)* | Real-shaped payload yields `["medicmain99"]` for both lists |
+
+## See also
+
+- [Enrichment pipeline](../architecture/enrichment-pipeline.mdx) — diagrams,
+  costs and limits.
+- [`steam::client`](./steam-client.mdx) — the `friends` and `summaries` calls.
+- [`a2s`](./a2s.mdx) — the UDP query behind `server_and_map`.

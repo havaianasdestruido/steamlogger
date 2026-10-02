@@ -1,0 +1,167 @@
+---
+id: querying-the-log
+title: Querying the log
+sidebar_label: Querying the log
+sidebar_position: 1
+description: Ready-made jq recipes for playtime totals, session counts, teammates and maps from steamlog.json.
+---
+
+# Querying the log
+
+`steamlog.json` is plain JSON with a
+[documented schema](../output-format.mdx), so `jq` is all you need. Every
+recipe below runs against the sample file shipped with the repository:
+
+```bash
+jq . tests/fixtures/steamlog_sample.json
+```
+
+:::note Open sessions have no `end`
+Most aggregations need to skip (or close) in-progress entries. The recipes use
+`select(.end != null)` where it matters.
+:::
+
+## Basics
+
+```bash
+# How many sessions are recorded?
+jq '.games | length' steamlog.json
+
+# Which games appear, alphabetically, without duplicates?
+jq -r '[.games[].name] | unique[]' steamlog.json
+
+# The ten most recent sessions, newest first
+jq '.games | sort_by(.start) | reverse | .[:10]' steamlog.json
+
+# Anything currently in progress?
+jq '.games[] | select(.end == null)' steamlog.json
+```
+
+## Playtime
+
+Durations are computed from the two RFC 3339 strings. `fromdateiso8601`
+requires a `Z` suffix, so offsets are normalised first with a small helper:
+
+```bash
+# Total hours per game, descending
+jq -r '
+  def secs: sub("\\.[0-9]+";"") | fromdateiso8601;
+  [ .games[]
+    | select(.end != null)
+    | {name, d: ((.end|secs) - (.start|secs))} ]
+  | group_by(.name)
+  | map({game: .[0].name, hours: ((map(.d) | add) / 3600 * 10 | round / 10)})
+  | sort_by(-.hours)[]
+  | "\(.hours)h  \(.game)"
+' steamlog.json
+```
+
+```text
+12.4h  Team Fortress 2
+ 3.1h  Counter-Strike 2
+ 0.8h  Portal 2
+```
+
+```bash
+# Longest single session
+jq -r '
+  def secs: fromdateiso8601;
+  [ .games[] | select(.end != null)
+    | {name, start, mins: (((.end|secs) - (.start|secs)) / 60 | round)} ]
+  | max_by(.mins)
+  | "\(.mins) min  \(.name)  (\(.start))"
+' steamlog.json
+```
+
+```bash
+# Hours played per calendar day (local date taken from the timestamp prefix)
+jq -r '
+  def secs: fromdateiso8601;
+  [ .games[] | select(.end != null)
+    | {day: .start[0:10], d: ((.end|secs) - (.start|secs))} ]
+  | group_by(.day)
+  | map({day: .[0].day, hours: ((map(.d)|add)/3600*10|round/10)})[]
+  | "\(.day)  \(.hours)h"
+' steamlog.json
+```
+
+## Friends
+
+```bash
+# Who do you play with most? (sessions in which each friend appeared)
+jq -r '
+  [ .games[].friends_playing // [] | .[] ]
+  | group_by(.) | map({name: .[0], sessions: length})
+  | sort_by(-.sessions)[]
+  | "\(.sessions)  \(.name)"
+' steamlog.json
+
+# Sessions where someone was in your actual lobby
+jq -r '
+  .games[] | select((.friends_in_lobby // []) | length > 0)
+  | "\(.start)  \(.name)  with \(.friends_in_lobby | join(", "))"
+' steamlog.json
+
+# Solo vs. social split
+jq '{
+  solo:   [.games[] | select((.friends_playing // []) | length == 0)] | length,
+  social: [.games[] | select((.friends_playing // []) | length > 0)]  | length
+}' steamlog.json
+```
+
+## Servers and maps
+
+```bash
+# Most played maps
+jq -r '
+  [ .games[] | select(.map != null) | .map ]
+  | group_by(.) | map({map: .[0], n: length}) | sort_by(-.n)[]
+  | "\(.n)  \(.map)"
+' steamlog.json
+
+# Servers you keep coming back to
+jq -r '
+  [ .games[] | select(.server != null) | .server ]
+  | group_by(.) | map({server: .[0], n: length}) | sort_by(-.n) | .[:5][]
+  | "\(.n)  \(.server)"
+' steamlog.json
+```
+
+## Exports
+
+```bash
+# CSV for a spreadsheet
+jq -r '
+  ["name","start","end","map","server","friends"],
+  (.games[] | [
+    .name, .start, (.end // ""), (.map // ""), (.server // ""),
+    ((.friends_playing // []) | join("|"))
+  ]) | @csv
+' steamlog.json > sessions.csv
+
+# One JSON object per line (for jq-less tools, grep, or a database import)
+jq -c '.games[]' steamlog.json > sessions.ndjson
+
+# Merge two machines' logs, keeping chronological order
+jq -s '{games: (map(.games) | add | sort_by(.start))}' laptop.json desktop.json > merged.json
+```
+
+:::tip Validate before replacing a log
+If you ever write a transformed file back over `steamlog.json`, stop
+SteamLogger first (it rewrites the whole file every tick) and check the result
+with `jq . merged.json`. An unparseable log is
+[silently replaced](../architecture/resilience.mdx#startup-read-failures-are-swallowed)
+at the next startup.
+:::
+
+## Watching live
+
+```bash
+# Follow the current session from a second terminal
+watch -n 5 "jq -r '.games[-1] | \"\(.name)  since \(.start)  \(.map // \"\")\"' steamlog.json"
+```
+
+## Doing this in Rust instead
+
+The crate's own types deserialise the file in three lines — see
+[Library usage](./library-usage.mdx).

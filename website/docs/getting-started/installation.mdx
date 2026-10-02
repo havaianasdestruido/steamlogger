@@ -1,0 +1,103 @@
+---
+id: installation
+title: Installation
+sidebar_label: Installation
+sidebar_position: 1
+description: Install the Rust toolchain, build SteamLogger, and obtain the Steam Web API key and SteamID64 it needs.
+---
+
+# Installation
+
+SteamLogger ships as source; you build it once with `cargo` and run the
+resulting binary.
+
+## 1. Prerequisites
+
+| Requirement | Why | Check |
+| --- | --- | --- |
+| Rust **1.75+** (edition 2021) | builds the crate | `cargo --version` |
+| A C linker (`build-essential`, Xcode CLT, MSVC Build Tools) | links the binary | `cc --version` |
+| Outbound **HTTPS** to `api.steampowered.com` | polling | `curl -sI https://api.steampowered.com` |
+| Outbound **UDP** (any port, usually `:27015`) | server/map enrichment, optional | — |
+
+If you do not have Rust yet:
+
+```bash
+curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh
+source "$HOME/.cargo/env"
+```
+
+:::note No OpenSSL needed
+HTTP goes through `reqwest` with the `rustls-tls` feature and
+`default-features = false`, so there is no system OpenSSL dependency. See
+[Dependencies](../contributing/development.mdx#dependencies).
+:::
+
+## 2. Get the source
+
+```bash
+git clone https://github.com/havaianasdestruido/steamlogger.git
+cd steamlogger
+```
+
+## 3. Build
+
+```bash
+cargo build --release
+```
+
+The binary lands at `target/release/steamlogger` (`.exe` on Windows). A debug
+build (`cargo build`) also works and compiles faster, but polls just as well.
+
+To install it on your `PATH` instead:
+
+```bash
+cargo install --path .
+```
+
+## 4. Get a Steam Web API key
+
+1. Sign in at **[https://steamcommunity.com/dev/apikey](https://steamcommunity.com/dev/apikey)**.
+2. Register any domain name (it is not validated for read-only calls).
+3. Copy the 32-character hexadecimal key.
+
+The key is a credential: it can read your friend list and profile data. Treat
+it like a password, keep it out of version control, and
+[revoke it](https://steamcommunity.com/dev/apikey) if it leaks.
+
+## 5. Find your SteamID64
+
+Your SteamID64 is the 17-digit number that usually starts with `7656119…`.
+
+- Open your Steam profile; if the URL is
+  `https://steamcommunity.com/profiles/76561198000000000`, the trailing number
+  is your SteamID64.
+- If you use a vanity URL (`/id/yourname`), resolve it with
+  [steamid.io](https://steamid.io) or the
+  `ISteamUser/ResolveVanityURL` endpoint.
+
+## 6. Make your game details public
+
+SteamLogger can only see what the Web API exposes. In Steam:
+
+**Steam → Settings → Privacy Settings**
+
+- *My profile* → **Public**
+- *Game details* → **Public**
+- Leave *Always keep my total playtime private* unchecked if you also want
+  playtime data visible.
+
+:::warning
+With game details set to *Private* or *Friends only*, `GetPlayerSummaries`
+omits `gameid`, SteamLogger sees "no game", and nothing is ever logged. This is
+the single most common reason for an empty `steamlog.json` — see
+[Troubleshooting](../troubleshooting.mdx#the-log-file-stays-empty).
+:::
+
+## Next steps
+
+- [Quickstart](./quickstart.mdx) — write the config file and run the first poll.
+- [Configuration reference](../configuration.mdx) — every key and environment
+  variable.
+- [Running continuously](./running-continuously.mdx) — systemd, launchd and
+  Task Scheduler recipes.

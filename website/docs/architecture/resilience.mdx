@@ -1,0 +1,136 @@
+---
+id: resilience
+title: Resilience and failure modes
+sidebar_label: Resilience
+sidebar_position: 5
+description: Every way SteamLogger can fail, what it degrades to, and the guarantees the log file does and does not provide.
+---
+
+# Resilience and failure modes
+
+SteamLogger's operating principle is simple: **a session must still be logged
+when everything optional breaks.** This page enumerates what can go wrong and
+exactly what happens.
+
+## Failure matrix
+
+| Failure | Detected in | Consequence | Recovery |
+| --- | --- | --- | --- |
+| Config file missing / invalid TOML / missing required key | `config::load` | Fatal: message on stderr, exit code `1` | Fix the config and restart |
+| `SIGINT` handler cannot be installed | `main::run` | Fatal: exit code `1` | Rare; usually a platform restriction |
+| Steam API unreachable, HTTP 5xx/429, timeout | `SteamClient::current_game` | `poll error: …` on stderr. **Tracker untouched**: an open session stays open, a closed one stays closed | Next tick |
+| Steam returns valid JSON with no `gameid` | `summary_to_current_game` | Treated as "not playing" → the session is closed | Next tick re-opens if you are in fact playing |
+| A row has an unparseable `steamid`/`gameid` | `parse_player_summaries` | That row is skipped; others are kept | — |
+| `GetFriendList` or batch summaries fail | `enrich::analyze` | Whole enrichment pass returns `Enrichment::default()`; `apply_meta` then clears map/server/friends for this write | Next tick |
+| Game server does not answer A2S_INFO | `enrich::server_and_map` | `server` and `map` omitted; friends data unaffected | Next tick |
+| A2S reply is malformed or a repeated challenge | `a2s::parse_response` | Same as above — error swallowed by `server_and_map` | Next tick |
+| `apply_meta` index out of bounds | `main::run` | `enrichment failed: …` on stderr, entry unchanged | Next tick |
+| Log file cannot be written (permissions, disk full) | `storage::write_log` | `failed to save log: …` on stderr; **in-memory log is still correct** | Next tick retries the full write |
+| Log file unreadable/corrupt at startup | `main::run` | Silently starts from an empty log — see below | Manual |
+| Process killed (`SIGKILL`, power loss) | — | At most one interval of state is lost; the open session is resumed on restart | Automatic |
+
+## The three guarantees
+
+### Atomic writes
+
+[`storage::write_log`](../reference/storage.mdx#write_log) never writes into
+the target file. It serialises to `<path>.tmp` and then `rename(2)`s it over
+the destination, which is atomic within a filesystem on both Unix and Windows
+(`MoveFileEx` semantics via `std::fs::rename`). A reader therefore sees either
+the complete previous file or the complete new one.
+
+```text
+write(steamlog.json.tmp)   ← may be interrupted; target untouched
+rename(.tmp → steamlog.json) ← atomic swap
+```
+
+:::note No `fsync`
+The implementation does not call `File::sync_all()` on the temp file or the
+directory. A kernel panic or power cut in the window between `write` and the
+filesystem's own flush can still lose the *most recent* write on some
+filesystems — but it cannot produce a half-written JSON file. For a session
+logger that rewrites every 30 seconds, that trade-off is intentional.
+:::
+
+### No fabricated data
+
+A failed poll never changes state. This matters more than it sounds: if a
+transient API error were treated as "no game running", every outage would
+split one session into two and insert a fake gap. Only an explicit
+`Ok(None)` — Steam saying "this profile is not in a game" — closes a session.
+
+### Degradation, not failure
+
+Every enrichment path returns `Option`/`Vec` rather than propagating an error:
+
+```rust
+// enrich.rs — a failed friend list is an empty Enrichment, not an Err
+let Ok(friends) = client.friends(me) else { return Enrichment::default(); };
+
+// enrich.rs — a failed A2S query is simply "no server, no map"
+match a2s.query(addr) { Ok(info) => (Some(info.name), Some(info.map)), Err(_) => (None, None) }
+```
+
+## Startup read failures are swallowed
+
+```rust title="src/main.rs"
+let mut tracker = Tracker::new(storage::read_log(&config.output_file).unwrap_or_default());
+```
+
+`read_log` distinguishes "file does not exist" (`Ok(empty)`) from "file is
+corrupt" (`Err`), but `main` collapses both with `unwrap_or_default()`. The
+practical effect:
+
+- A missing file is normal — the first run creates it.
+- A **corrupt or unparseable** file is treated as empty, and the first
+  successful write **replaces it**. Previous history is lost.
+
+:::danger Validate before restarting
+If you hand-edit `steamlog.json`, run `jq . steamlog.json` first. If the file
+is already damaged, move it aside before starting SteamLogger so the daemon
+cannot overwrite your only copy. A library consumer can avoid the behaviour
+entirely by handling `read_log`'s `Err` instead of defaulting — see
+[Library usage](../guides/library-usage.mdx).
+:::
+
+## Timeouts, not retries
+
+| Operation | Bound | Where |
+| --- | --- | --- |
+| Any Steam HTTP request | 10 s | `SteamClient::new` (configurable via `with_timeout`) |
+| A2S_INFO UDP read | 3 s | `A2sClient::new` (field is private; only tests change it) |
+| Sleep between ticks | `max(poll_interval_secs, 5)` | `main::run` |
+
+There is **no retry logic, no exponential backoff and no circuit breaker**.
+The poll interval *is* the retry schedule. If Steam rate-limits you (HTTP 429),
+the request fails, the error is printed, and the next tick tries again — so
+lower intervals do not recover faster, they just fail more often.
+
+## What is deliberately not handled
+
+- **No log rotation or pruning.** The file grows with your history and is
+  rewritten in full every tick. Thousands of sessions are fine (a few hundred
+  KB); millions would not be.
+- **No concurrent-writer protection.** Two processes pointed at the same
+  `output_file` will clobber each other. There is no lock file.
+- **No `SIGTERM` handling.** Only `SIGINT` is caught (`ctrlc`). Service
+  managers should send `SIGINT` for the cleanest shutdown — see
+  [Running continuously](../getting-started/running-continuously.mdx#why-killsignalsigint).
+- **No structured logging.** Diagnostics go to stdout/stderr as plain text:
+  `poll error: …`, `enrichment failed: …`, `failed to save log: …`.
+
+## Reading the diagnostics
+
+| Message | Stream | Meaning |
+| --- | --- | --- |
+| `SteamLogger running. Log file: … (Ctrl+C to stop)` | stdout | Startup succeeded |
+| `poll error: fetching player summaries: …` | stderr | The Steam request failed; state untouched |
+| `poll error: … request failed` | stderr | Steam answered with a non-success HTTP status |
+| `enrichment failed: entry index N out of bounds` | stderr | Internal inconsistency; the entry was not updated |
+| `failed to save log: …` | stderr | Filesystem problem; the in-memory log is intact |
+| `failed to load config from …` | stderr | Fatal, exit `1` |
+| `stopped` | stdout | Clean shutdown, exit `0` |
+
+Context strings come from `anyhow` and compose: `fetching player summaries` →
+the underlying reqwest error → the underlying I/O error. Troubleshooting
+recipes for each are in [Troubleshooting](../troubleshooting.mdx).

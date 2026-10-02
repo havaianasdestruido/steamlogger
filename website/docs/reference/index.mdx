@@ -1,0 +1,148 @@
+---
+id: index
+title: Code reference
+sidebar_label: Overview
+slug: /reference/
+description: Crate map and complete index of every public item in the steamlogger crate.
+---
+
+# Code reference
+
+This section documents **every public item** in the `steamlogger` crate, module
+by module: signatures, behaviour, error cases, invariants and the tests that
+cover them.
+
+```toml title="Cargo.toml"
+[package]
+name = "steamlogger"
+version = "0.1.0"
+edition = "2021"
+license = "MIT"
+
+[lib]
+name = "steamlogger"
+path = "src/lib.rs"
+
+[[bin]]
+name = "steamlogger"
+path = "src/main.rs"
+```
+
+The crate builds both a library and a binary from the same source tree. The
+library is the reusable part; the binary is one way to wire it together.
+
+## Crate map
+
+```rust title="src/lib.rs"
+pub mod a2s;
+pub mod config;
+pub mod enrich;
+pub mod model;
+pub mod steam;   // pub mod api; pub mod client;
+pub mod storage;
+pub mod tracker;
+```
+
+| Module | Page | Lines (incl. tests) | Role |
+| --- | --- | --- | --- |
+| *(binary)* | [`main`](./main.mdx) | 98 | Poll loop, wiring, signal handling |
+| `config` | [`config`](./config.mdx) | 263 | TOML + environment → `Config` |
+| `model` | [`model`](./model.mdx) | 40 | `LogEntry`, `GameLog` serde types |
+| `tracker` | [`tracker`](./tracker.mdx) | 259 | Session state machine |
+| `enrich` | [`enrich`](./enrich.mdx) | 190 | Friends, lobby, server/map matching |
+| `storage` | [`storage`](./storage.mdx) | 210 | Atomic JSON read/write |
+| `a2s` | [`a2s`](./a2s.mdx) | 331 | A2S_INFO UDP client |
+| `steam::api` | [`steam::api`](./steam-api.mdx) | 334 | URLs, raw/domain types, parsers |
+| `steam::client` | [`steam::client`](./steam-client.mdx) | 125 | Blocking HTTP client |
+
+## Complete public API index
+
+### Types
+
+| Item | Kind | Module | Summary |
+| --- | --- | --- | --- |
+| [`Config`](./config.mdx#config) | struct | `config` | Fully resolved runtime configuration |
+| [`RawConfig`](./config.mdx#rawconfig) | struct | `config` | Raw TOML shape with defaults |
+| [`LogEntry`](./model.mdx#logentry) | struct | `model` | One recorded session |
+| [`GameLog`](./model.mdx#gamelog) | struct | `model` | Root object: `{ "games": [...] }` |
+| [`Tracker`](./tracker.mdx#tracker) | struct | `tracker` | Session state machine + in-memory log |
+| [`SessionEvent`](./tracker.mdx#sessionevent) | enum | `tracker` | `Started` / `Running` / `Ended` / `Idle` |
+| [`Enrichment`](./enrich.mdx#enrichment) | struct | `enrich` | Best-effort extras for one tick |
+| [`ServerInfo`](./a2s.mdx#serverinfo) | struct | `a2s` | Server name + current map |
+| [`A2sClient`](./a2s.mdx#a2sclient) | struct | `a2s` | UDP A2S_INFO query client |
+| [`CurrentGame`](./steam-api.mdx#currentgame) | struct | `steam::api` | The game a player is running |
+| [`Friend`](./steam-api.mdx#friend) | struct | `steam::api` | A friend-list entry |
+| [`PlayerSummary`](./steam-api.mdx#playersummary) | struct | `steam::api` | A `GetPlayerSummaries` row |
+| [`PlayerSummariesResponse`](./steam-api.mdx#raw-response-types) | struct | `steam::api` | Raw JSON envelope |
+| [`PlayerSummariesBody`](./steam-api.mdx#raw-response-types) | struct | `steam::api` | Raw JSON body |
+| [`RawPlayerSummary`](./steam-api.mdx#raw-response-types) | struct | `steam::api` | Raw player row |
+| [`FriendListResponse`](./steam-api.mdx#raw-response-types) | struct | `steam::api` | Raw JSON envelope |
+| [`FriendListBody`](./steam-api.mdx#raw-response-types) | struct | `steam::api` | Raw JSON body |
+| [`RawFriend`](./steam-api.mdx#raw-response-types) | struct | `steam::api` | Raw friend row |
+| [`SteamClient`](./steam-client.mdx#steamclient) | struct | `steam::client` | Blocking Steam Web API client |
+
+### Functions and methods
+
+| Item | Signature (abridged) | Module |
+| --- | --- | --- |
+| [`config::load`](./config.mdx#load) | `fn load(path: &Path) -> anyhow::Result<Config>` | `config` |
+| [`config::example_config`](./config.mdx#example_config) | `fn example_config() -> String` | `config` |
+| [`LogEntry::new`](./model.mdx#logentrynew) | `fn new(name: String, start: String) -> Self` | `model` |
+| [`Tracker::new`](./tracker.mdx#new) | `fn new(log: GameLog) -> Self` | `tracker` |
+| [`Tracker::update`](./tracker.mdx#update) | `fn update(&mut self, game: &CurrentGame, now: &str) -> SessionEvent` | `tracker` |
+| [`Tracker::end_active`](./tracker.mdx#end_active) | `fn end_active(&mut self, now: &str) -> SessionEvent` | `tracker` |
+| [`Tracker::apply_meta`](./tracker.mdx#apply_meta) | `fn apply_meta(&mut self, index, map, server, playing, lobby) -> anyhow::Result<()>` | `tracker` |
+| [`Tracker::log`](./tracker.mdx#log) | `fn log(&self) -> &GameLog` | `tracker` |
+| [`Tracker::into_log`](./tracker.mdx#into_log) | `fn into_log(self) -> GameLog` | `tracker` |
+| [`Tracker::active_index`](./tracker.mdx#active_index) | `fn active_index(&self) -> Option<usize>` | `tracker` |
+| [`enrich::analyze`](./enrich.mdx#analyze) | `fn analyze(client, a2s, me, game) -> Enrichment` | `enrich` |
+| [`enrich::same_game_friends`](./enrich.mdx#same_game_friends) | `fn same_game_friends(&[PlayerSummary], &CurrentGame) -> Vec<String>` | `enrich` |
+| [`enrich::lobby_friends`](./enrich.mdx#lobby_friends) | `fn lobby_friends(&[PlayerSummary], &CurrentGame) -> Vec<String>` | `enrich` |
+| [`enrich::server_and_map`](./enrich.mdx#server_and_map) | `fn server_and_map(&mut A2sClient, &CurrentGame) -> (Option<String>, Option<String>)` | `enrich` |
+| [`storage::read_log`](./storage.mdx#read_log) | `fn read_log(path: &Path) -> anyhow::Result<GameLog>` | `storage` |
+| [`storage::write_log`](./storage.mdx#write_log) | `fn write_log(path: &Path, log: &GameLog) -> anyhow::Result<()>` | `storage` |
+| [`A2sClient::new`](./a2s.mdx#new) | `fn new() -> Self` | `a2s` |
+| [`A2sClient::query`](./a2s.mdx#query) | `fn query(&mut self, addr: &str) -> anyhow::Result<ServerInfo>` | `a2s` |
+| [`api::summary_to_current_game`](./steam-api.mdx#summary_to_current_game) | `fn summary_to_current_game(&PlayerSummary) -> Option<CurrentGame>` | `steam::api` |
+| [`api::player_summaries_url`](./steam-api.mdx#player_summaries_url) | `fn player_summaries_url(key: &str, ids: &[u64]) -> String` | `steam::api` |
+| [`api::friend_list_url`](./steam-api.mdx#friend_list_url) | `fn friend_list_url(key: &str, steam_id: u64) -> String` | `steam::api` |
+| [`api::parse_player_summaries`](./steam-api.mdx#parse_player_summaries) | `fn parse_player_summaries(json: &str) -> anyhow::Result<Vec<PlayerSummary>>` | `steam::api` |
+| [`api::parse_friends`](./steam-api.mdx#parse_friends) | `fn parse_friends(json: &str) -> anyhow::Result<Vec<Friend>>` | `steam::api` |
+| [`api::entry_to_json`](./steam-api.mdx#entry_to_json) | `fn entry_to_json(entry: &LogEntry) -> String` | `steam::api` |
+| [`SteamClient::new`](./steam-client.mdx#new) | `fn new(key: String) -> Self` | `steam::client` |
+| [`SteamClient::with_timeout`](./steam-client.mdx#with_timeout) | `fn with_timeout(key: String, timeout: Duration) -> Self` | `steam::client` |
+| [`SteamClient::current_game`](./steam-client.mdx#current_game) | `fn current_game(&self, steam_id: u64) -> anyhow::Result<Option<CurrentGame>>` | `steam::client` |
+| [`SteamClient::friends`](./steam-client.mdx#friends) | `fn friends(&self, steam_id: u64) -> anyhow::Result<Vec<Friend>>` | `steam::client` |
+| [`SteamClient::summaries`](./steam-client.mdx#summaries) | `fn summaries(&self, ids: &[u64]) -> anyhow::Result<Vec<PlayerSummary>>` | `steam::client` |
+
+:::tip This index is enforced
+`npm run check:api` in `website/` scans `src/**/*.rs` for `pub` items and fails
+if any of them is missing from these reference pages. See
+[Documentation workflow](../contributing/documentation.mdx#api-coverage-check).
+:::
+
+## Conventions used in this reference
+
+- **Signatures** are copied verbatim from the source; `self` receivers show
+  mutability exactly as declared.
+- **Errors** sections list the `anyhow` context strings you will actually see
+  on stderr.
+- **Panics** sections exist only where the code can panic (there are two such
+  places in the crate, both documented).
+- Private helpers are documented when they carry meaningful behaviour —
+  `Tracker::close_at`, `storage::temp_path`, `a2s::parse_cstr`,
+  `client::chunks` — and marked *(private)*.
+
+## Dependencies
+
+| Crate | Version | Used for |
+| --- | --- | --- |
+| `anyhow` | 1 | Error type and `.context()` messages everywhere |
+| `chrono` | 0.4 (`serde`) | RFC 3339 local timestamps in `main::now` |
+| `ctrlc` | 3 | `SIGINT` handler |
+| `reqwest` | 0.12 (`blocking`, `json`, `rustls-tls`, no default features) | HTTPS to the Steam Web API |
+| `serde` | 1 (`derive`) | Config and log (de)serialisation |
+| `serde_json` | 1 | JSON parsing and pretty printing |
+| `toml` | 0.8 | Config parsing |
+
+No async runtime, no OpenSSL, no database driver.

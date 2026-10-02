@@ -1,0 +1,206 @@
+---
+id: steam-client
+title: steamlogger::steam::client
+sidebar_label: steam::client
+sidebar_position: 9
+description: API reference for steam::client — the blocking Steam Web API client, request chunking, timeouts and error context.
+---
+
+# `steamlogger::steam::client`
+
+<SourceLink path="src/steam/client.rs" lines={125} />
+
+The HTTP layer: a thin blocking wrapper that builds URLs with
+[`steam::api`](./steam-api.mdx), performs the request, and hands the body back
+to the same module's parsers. It adds exactly three things — a configured
+`reqwest` client, request chunking, and error context.
+
+```rust
+use steamlogger::steam::client::SteamClient;
+```
+
+## Types
+
+### `SteamClient` {/* #steamclient */}
+
+```rust
+#[derive(Debug)]
+pub struct SteamClient {
+    key: String,                    // private
+    http: reqwest::blocking::Client, // private
+}
+```
+
+One instance is enough for the whole process: `reqwest`'s blocking client
+keeps an internal connection pool, so repeated polls reuse the same TLS
+connection.
+
+| Property | Value |
+| --- | --- |
+| Transport | `reqwest` 0.12, `blocking` + `json` + `rustls-tls`, default features off |
+| Timeout | 10 s by default (whole request) |
+| User agent | `SteamLogger/0.1 (github.com/steamlogger)` |
+| Retries | none |
+| Auth | API key as a query parameter, injected by the URL builders |
+
+## Methods
+
+### `SteamClient::new` {/* #new */}
+
+```rust
+pub fn new(key: String) -> Self
+```
+
+Equivalent to `with_timeout(key, Duration::from_secs(10))`.
+
+### `SteamClient::with_timeout` {/* #with_timeout */}
+
+```rust
+pub fn with_timeout(key: String, timeout: Duration) -> Self
+```
+
+Builds the underlying client with an explicit timeout.
+
+:::danger Panics
+The builder result is unwrapped with
+`.expect("failed to build HTTP client")`. In practice this only fails if the
+TLS backend cannot be initialised, which is a fatal environment problem
+anyway.
+:::
+
+```rust
+use std::time::Duration;
+use steamlogger::steam::client::SteamClient;
+
+// Shorter timeout for a snappier loop on a reliable connection
+let client = SteamClient::with_timeout(api_key, Duration::from_secs(3));
+```
+
+### `SteamClient::current_game` {/* #current_game */}
+
+```rust
+pub fn current_game(&self, steam_id: u64) -> anyhow::Result<Option<CurrentGame>>
+```
+
+One `GetPlayerSummaries` request for a single SteamID, mapped through
+[`summary_to_current_game`](./steam-api.mdx#summary_to_current_game).
+
+| Result | Meaning |
+| --- | --- |
+| `Ok(Some(game))` | The account is in a game |
+| `Ok(None)` | Not in a game, the profile hides game details, or the response contained no rows |
+| `Err(e)` | Network, HTTP status, or JSON failure |
+
+The three outcomes are exactly what [`main`](./main.mdx#run) switches on, and
+the distinction between `Ok(None)` and `Err` is what keeps outages from
+closing sessions.
+
+### `SteamClient::friends` {/* #friends */}
+
+```rust
+pub fn friends(&self, steam_id: u64) -> anyhow::Result<Vec<Friend>>
+```
+
+One `GetFriendList` request, parsed by
+[`parse_friends`](./steam-api.mdx#parse_friends). Returns SteamIDs with empty
+persona names.
+
+:::note A private friend list is an error, not an empty list
+Steam answers `GetFriendList` with HTTP 401 when the friend list is not
+public, which `error_for_status` turns into
+`friend list request failed`. `enrich::analyze` swallows it and returns empty
+enrichment, so the session is still logged — but `friends_playing` will never
+appear. Make the friend list public if you want that data.
+:::
+
+### `SteamClient::summaries` {/* #summaries */}
+
+```rust
+pub fn summaries(&self, ids: &[u64]) -> anyhow::Result<Vec<PlayerSummary>>
+```
+
+Player summaries for any number of ids, chunked at Steam's **100 ids per
+request** limit and concatenated in order.
+
+```rust
+let mut out = Vec::with_capacity(ids.len());
+for chunk in chunks(ids) {
+    let url = player_summaries_url(&self.key, chunk);
+    let body = self.get_text(url, "player summaries")?;
+    out.extend(parse_player_summaries(&body)?);
+}
+Ok(out)
+```
+
+- Requests are sequential — 250 friends means three round trips, one after the
+  other.
+- A failure in any chunk aborts the whole call with `Err`; partial results are
+  discarded.
+- An empty `ids` slice performs no requests and returns an empty vector.
+
+## Private helpers
+
+### `get_text` {/* #get_text */}
+
+```rust
+fn get_text(&self, url: String, what: &str) -> anyhow::Result<String>
+```
+
+The single HTTP path in the crate. Each stage adds `anyhow` context so the
+stderr line identifies *where* it broke:
+
+| Stage | Context string |
+| --- | --- |
+| `send()` | `fetching <what>` |
+| `error_for_status()` | `<what> request failed` |
+| `text()` | `reading <what> response body` |
+
+`<what>` is `"player summaries"` or `"friend list"`, so a typical failure
+reads:
+
+```text
+poll error: fetching player summaries: error sending request for url (…): operation timed out
+```
+
+### `chunks` {/* #chunks */}
+
+```rust
+fn chunks(ids: &[u64]) -> Vec<&[u64]>
+```
+
+`ids.chunks(100).collect()` — Steam's documented per-request maximum. Order is
+preserved and an empty input yields no chunks (hence no requests). Five unit
+tests pin this down because exceeding the limit silently truncates results
+server-side.
+
+## Rate limits and etiquette
+
+- Steam's documented courtesy limit is **100 000 calls per key per day**.
+- SteamLogger makes `1 + ceil(friends / 100)` calls per tick while in a game
+  and `1` while idle, so even a 5-second interval stays well inside the limit.
+- HTTP 429 and 5xx responses surface as errors through `error_for_status`;
+  there is no backoff, so the effective retry interval is your poll interval.
+- The key is sent as a query parameter over HTTPS — fine on the wire, but keep
+  it out of logs and screenshots.
+
+## Tests
+
+6 unit tests in `src/steam/client.rs`. None perform network I/O: the HTTP path
+is exercised indirectly through the parsers (which have their own suites) and
+the chunking logic is tested exhaustively.
+
+| Test | Asserts |
+| --- | --- |
+| `client_constructs` | `SteamClient::new` builds without panicking |
+| `chunks_empty` | No chunks → no requests |
+| `chunks_under_limit` | A short slice stays whole |
+| `chunks_exact_limit` | Exactly 100 ids is one chunk |
+| `chunks_over_limit` | 101 ids split into 100 + 1 |
+| `chunks_preserve_order` | 250 ids flatten back to the original order |
+
+## See also
+
+- [`steam::api`](./steam-api.mdx) — URLs, types and parsers used here.
+- [`enrich`](./enrich.mdx) — the main consumer of `friends` and `summaries`.
+- [The poll loop](../architecture/poll-loop.mdx#cost-per-tick) — request
+  volume per tick.

@@ -1,0 +1,185 @@
+---
+id: troubleshooting
+title: Troubleshooting
+sidebar_label: Troubleshooting
+sidebar_position: 9
+description: Diagnose empty logs, missing friends, absent server names, rate limits and startup failures.
+---
+
+# Troubleshooting
+
+Work from the symptom. Every message quoted here comes from the source, so you
+can grep for it.
+
+## It will not start
+
+### `failed to load config from <path>: config file not found`
+
+SteamLogger looks for `steamlogger.toml` **in the current working directory**
+unless you pass a path. Under a service manager the working directory is
+rarely what you expect.
+
+```bash
+cp steamlogger.example.toml steamlogger.toml   # create it
+steamlogger /absolute/path/to/config.toml      # or be explicit
+```
+
+### `missing required config key 'api_key'` / `'steam_id'`
+
+Neither the file nor the environment supplied the value. Note that
+`STEAMLOGGER_API_KEY=""` counts as *unset* (the file value is used), while
+`STEAMLOGGER_STEAM_ID=""` is a hard error — see
+[precedence](./configuration.mdx#precedence).
+
+### `invalid TOML in config file <path>`
+
+Usually a quoting problem. `steam_id` is a **number, not a string**:
+
+```diff title="steamlogger.toml"
+- steam_id = "76561198000000000"
++ steam_id = 76561198000000000
+```
+
+### `STEAMLOGGER_STEAM_ID must be a valid u64`
+
+The variable is set to something non-numeric — a vanity name, a `STEAM_0:…`
+id, or an empty string. Convert it to the 17-digit SteamID64 first.
+
+### `failed to install Ctrl+C handler`
+
+Another handler is already registered in the same process, or the platform
+forbids it. Rare outside embedded/sandboxed environments.
+
+## The log file stays empty
+
+This is the most common report, and it is almost never a SteamLogger bug.
+Check in this order:
+
+1. **Game details privacy.** Steam → Settings → Privacy Settings → *Game
+   details* must be **Public**. Otherwise `GetPlayerSummaries` omits `gameid`,
+   SteamLogger reads "not playing", and nothing is ever recorded.
+2. **The right account.** Confirm the SteamID64 is the one actually playing:
+
+   ```bash
+   curl -s "https://api.steampowered.com/ISteamUser/GetPlayerSummaries/v2/?key=$KEY&steamids=$ID" | jq '.response.players[0] | {personaname, gameid, gameextrainfo}'
+   ```
+
+   A `gameid` here means SteamLogger will see it too.
+3. **You waited at least one interval.** Nothing is written for a game that
+   started and stopped between two polls.
+4. **The file is somewhere else.** A relative `output_file` lands next to the
+   *working directory*, not the binary. The startup line prints the path it
+   will use:
+
+   ```text
+   SteamLogger running. Log file: steamlog.json  (Ctrl+C to stop)
+   ```
+5. **Non-Steam games are invisible.** Shortcuts added to the library are not
+   reported by the Web API.
+
+## `poll error: …` keeps printing
+
+| Message tail | Meaning | Action |
+| --- | --- | --- |
+| `operation timed out` | Steam did not answer within 10 s | Transient; it retries next tick |
+| `request failed: HTTP status 401` | Bad or revoked API key | Regenerate at [steamcommunity.com/dev/apikey](https://steamcommunity.com/dev/apikey) |
+| `request failed: HTTP status 403` | Key valid but not allowed to read this profile | Check privacy settings |
+| `request failed: HTTP status 429` | Rate limited | Increase `poll_interval_secs` |
+| `request failed: HTTP status 5xx` | Steam outage | Wait; check [steamstat.us](https://steamstat.us) |
+| `dns error` / `connection refused` | Local network or firewall | Allow outbound HTTPS to `api.steampowered.com` |
+
+State is untouched on a failed poll, so an outage never closes or splits a
+session — see [Resilience](./architecture/resilience.mdx).
+
+## `friends_playing` is always missing
+
+- `enrich` must be `true` (it is by default).
+- Your **friend list must be public**. Steam answers `GetFriendList` with HTTP
+  401 otherwise, and `enrich::analyze` silently returns empty data. Test it:
+
+  ```bash
+  curl -s -o /dev/null -w '%{http_code}\n' \
+    "https://api.steampowered.com/ISteamUser/GetFriendList/v1/?key=$KEY&steamid=$ID&relationship=friend"
+  ```
+
+  `200` is good; `401` means the list is private.
+- Friends with private game details never match.
+- The field is omitted — not `[]` — when nobody matched.
+
+## `friends_in_lobby` never appears
+
+Steam only reports `lobbysteamid` for games built on **Steam lobbies** (P2P
+matchmaking and party systems). Most dedicated-server games never expose it,
+and SteamLogger does not guess. Verify with the same `GetPlayerSummaries`
+query above: no `lobbysteamid` in the payload means no lobby data exists.
+
+## `server` and `map` never appear
+
+In order of likelihood:
+
+1. **Steam reports no `gameserverip`** — single-player games, P2P sessions, or
+   a game that does not publish its server. No query is attempted.
+2. **The server does not answer A2S_INFO** — firewalled query port, or
+   `sv_enableoldqueries`-style restrictions.
+3. **Outbound UDP is blocked** by your network.
+4. **The server is strict about the request payload.** SteamLogger sends a
+   non-standard A2S_INFO string; some servers ignore it. This is a known
+   deviation — see
+   [`a2s` → Request](./reference/a2s.mdx#request).
+
+Check manually with any A2S tool against the `gameserverip` Steam reports.
+
+## Timestamps look wrong
+
+- They are **local time with an offset** (`2026-08-10T14:32:15-03:00`), not
+  UTC. A `-03:00` suffix is not an error.
+- Second precision only, quantised to the poll interval.
+- If a machine's timezone changes mid-session, `start` and `end` can carry
+  different offsets. Parse with an offset-aware parser.
+
+## A session lasted far too long
+
+The tracker closes an entry only when a poll says "not playing". If
+SteamLogger was stopped during the session, the entry stays open and the next
+run resumes it, absorbing the downtime. See
+[Session lifecycle](./architecture/session-lifecycle.mdx#resuming-after-a-restart).
+Run it under a supervisor that restarts quickly, or close the entry by hand
+(add an `end` field, keeping the JSON valid).
+
+## My history disappeared
+
+At startup a log that cannot be parsed is treated as empty, and the first
+write replaces it. Always `jq . steamlog.json` after hand-editing, and keep a
+backup. Details:
+[Resilience → Startup read failures](./architecture/resilience.mdx#startup-read-failures-are-swallowed).
+
+## `failed to save log: …`
+
+The in-memory log is intact; only the write failed. Common causes: the
+directory is not writable, the disk is full, or `output_file` is a **relative
+path with a directory component** (`logs/steamlog.json`), which hits a known
+temp-path bug. Use an absolute path or a bare filename — see
+[`storage::write_log`](./reference/storage.mdx#known-edge-case-relative-paths-with-a-parent-directory).
+
+## Two copies are fighting over the file
+
+Each process rewrites the whole log every tick; there is no locking, so the
+last writer wins and entries are lost. Run one process per account, each with
+its own `output_file`.
+
+## Still stuck
+
+Collect this before opening an issue — and **redact your API key**, including
+from any URL:
+
+```bash
+cargo --version; rustc --version; uname -a
+jq '.games | length' steamlog.json
+```
+
+(There is no `--version` flag: the first argument is always treated as a
+config path.)
+
+Then file it at
+[github.com/havaianasdestruido/steamlogger/issues](https://github.com/havaianasdestruido/steamlogger/issues)
+with the stderr output and your config file *with the key removed*.

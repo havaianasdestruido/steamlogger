@@ -1,0 +1,170 @@
+---
+id: testing
+title: Testing
+sidebar_label: Testing
+sidebar_position: 2
+description: The complete SteamLogger test inventory — 60 unit tests, 11 integration tests, fixtures and the no-network rule.
+---
+
+# Testing
+
+```bash
+cargo test                      # everything
+cargo test --lib                # unit tests only (60)
+cargo test --test integration   # integration tests only (11)
+cargo test tracker::            # one module
+cargo test -- --nocapture       # see printed output
+```
+
+**71 tests** in total. They run in a few seconds and need no API key, no
+network and no Steam installation.
+
+## The no-network rule
+
+No test may contact the public internet. The strategies used instead:
+
+| Concern | Strategy |
+| --- | --- |
+| Steam JSON | Literal payload strings in unit tests, recorded fixtures in integration tests |
+| HTTP client | Only construction is tested; the request path is covered by testing its inputs (URLs) and outputs (parsers) separately |
+| A2S protocol | A real `UdpSocket` bound to `127.0.0.1`, answering with crafted packets |
+| Filesystem | Unique paths under `std::env::temp_dir()`, cleaned up afterwards |
+| Clock | Timestamps are passed in as plain strings (`"T0"`, `"T1"`, …) |
+
+## Unit tests
+
+### `src/config.rs` — 11 tests {/* #config-tests */}
+
+Covers defaults, the two required keys, environment overrides and every error
+path: `defaults_are_sane`, `minimal_config_loads_with_defaults`,
+`explicit_values_override_defaults`, `missing_api_key_is_error`,
+`missing_steam_id_is_error`, `nonexistent_file_is_error`,
+`invalid_toml_is_error`, `api_key_env_override`, `steam_id_env_override`,
+`env_can_supply_missing_keys`, `example_config_parses_and_has_required_keys`.
+
+Environment-touching tests share a `static ENV_LOCK: Mutex<()>` because
+`std::env::set_var` is process-global.
+
+### `src/tracker.rs` — 10 tests {/* #tracker-tests */}
+
+One per transition plus the edge cases: `empty_tracker_starts_idle`, `start`,
+`running`, `switch`, `end`, `resume`, `closed_last_entry_not_resumed`,
+`apply_meta`, `apply_meta_out_of_bounds`, `into_log_returns_underlying`.
+
+These are the tests to read first — they are the executable specification of
+the [session lifecycle](../architecture/session-lifecycle.mdx).
+
+### `src/steam/api.rs` — 10 tests {/* #api-tests */}
+
+Type projection (`summary_without_game_is_none`,
+`summary_to_current_game_maps_fields`,
+`summary_missing_game_extra_info_uses_app_name`), parsing
+(`parse_player_summaries_maps_in_game_and_idle_players`,
+`parse_player_summaries_empty_players`,
+`parse_player_summaries_garbage_is_error`,
+`parse_player_summaries_skips_row_with_bad_steamid`,
+`parse_friends_filters_non_friends`), URL construction
+(`url_builders_produce_expected_urls`) and JSON round-tripping
+(`entry_to_json_round_trips`).
+
+### `src/a2s.rs` — 9 tests {/* #a2s-tests */}
+
+Pure parser tests (`parses_standard_response`, `parses_goldsrc_response`,
+`rejects_garbage`, `handles_utf8_names_lossy`) plus five that run a loopback
+UDP server in a background thread: `round_trip_with_echo_server`,
+`query_without_port_uses_default`, `challenge_round_trip`,
+`challenge_repeat_gives_up`, `query_unreachable_port_errors`.
+
+:::warning `query_without_port_uses_default` binds port 27015
+It must, because it verifies the default-port behaviour — so the test fails if
+something else on the machine (a real game server, another test run) already
+holds UDP 27015.
+:::
+
+### `src/storage.rs` — 8 tests {/* #storage-tests */}
+
+`missing_file_reads_empty`, `round_trip_preserves_entry`,
+`pretty_output_with_skipped_optionals`, `overwrite_replaces_old_log`,
+`no_stray_temp_file_after_write`, `malformed_json_is_error`,
+`bare_array_is_normalized`, `nested_parent_dir_created`.
+
+Paths are made unique with an `AtomicU32` counter plus the process id, so
+parallel test threads never collide.
+
+### `src/enrich.rs` — 6 tests {/* #enrich-tests */}
+
+`no_friends_plays_nothing`, `same_game_friends_filters_sorts_dedupes`,
+`lobby_friends_matches_same_lobby`, `lobby_friends_ignored_when_no_lobby`,
+`no_gameserver_ip_yields_no_server_or_map`, `build_assembles_enrichment`.
+
+### `src/steam/client.rs` — 6 tests {/* #client-tests */}
+
+`client_constructs` plus exhaustive coverage of the 100-id chunking:
+`chunks_empty`, `chunks_under_limit`, `chunks_exact_limit`,
+`chunks_over_limit`, `chunks_preserve_order`.
+
+## Integration tests — 11 tests
+
+[`tests/integration.rs`](https://github.com/havaianasdestruido/steamlogger/blob/main/tests/integration.rs)
+uses only the public API, exactly as an external crate would.
+
+| Test | Covers |
+| --- | --- |
+| `config_load_roundtrip` | Config defaults through the public API |
+| `config_missing_required_key_errors` | Error surface from outside the crate |
+| `parse_player_summaries_fixture` | A realistic 3-player payload |
+| `summary_to_current_game_fixture` | Fixture row → `CurrentGame` |
+| `parse_friends_fixture` | Friend list parsing |
+| `enrich_same_lobby_from_fixture` | Both matchers over the same fixture |
+| `tracker_end_to_end` | start → running → meta → switch → end |
+| `tracker_resume_closes_open_session` | Restart mid-session |
+| `log_json_shape` | Exact JSON key sets for full and minimal entries |
+| `storage_roundtrip_temp` | Write → read with every field populated |
+| `steamlog_sample_fixture_parses` | The documented sample log stays valid |
+
+## Fixtures
+
+| File | Shape | Used by |
+| --- | --- | --- |
+| `tests/fixtures/player_summaries.json` | Full `GetPlayerSummaries` response: the tracked user in TF2 with a lobby and server, a friend in the same lobby, a friend in CS2 | 3 integration tests |
+| `tests/fixtures/friends.json` | `GetFriendList` response with two friends | `parse_friends_fixture` |
+| `tests/fixtures/steamlog_sample.json` | A log with one closed, fully enriched session and one open session | `steamlog_sample_fixture_parses`, and the examples in these docs |
+
+The fixtures contain the *complete* Steam payload shape — avatars, clan ids,
+timestamps — not just the fields SteamLogger reads, which is what proves the
+`#[serde(default)]` tolerance works.
+
+## Writing a new test
+
+- Put unit tests in the module's own `#[cfg(test)] mod tests`, integration
+  tests in `tests/integration.rs`.
+- Build temp paths with the existing `unique_path`/`test_path` helpers; never
+  write into the repository.
+- Pass timestamps as short literals (`"T0"`), not real dates, unless the test
+  is about formatting.
+- If a test needs an environment variable, lock `ENV_LOCK` first.
+- Assert on error *substrings* (`err.contains("api_key")`), not on exact
+  messages — the `anyhow` context chain may grow.
+
+## Continuous integration
+
+The repository has no Rust CI workflow yet; the documentation site is built
+and deployed by `.github/workflows/docs.yml`. A minimal Rust job would be:
+
+```yaml title=".github/workflows/rust.yml (suggested)"
+name: rust
+on: [push, pull_request]
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy, rustfmt
+      - run: cargo fmt --check
+      - run: cargo clippy --all-targets -- -D warnings
+      - run: cargo test
+```
+
+Note the UDP-27015 caveat above if you run tests on shared runners.

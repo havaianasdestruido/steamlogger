@@ -1,0 +1,89 @@
+/**
+ * Global styles for the SteamLogger docs.
+ * Palette is derived from the Steam client: deep navy surfaces + sky blue accent.
+ */
+
+:root {
+  --ifm-color-primary: #1668a5;
+  --ifm-color-primary-dark: #145f95;
+  --ifm-color-primary-darker: #135a8c;
+  --ifm-color-primary-darkest: #0f4a74;
+  --ifm-color-primary-light: #1877b5;
+  --ifm-color-primary-lighter: #197cbe;
+  --ifm-color-primary-lightest: #2a92d8;
+  --ifm-code-font-size: 93%;
+  --ifm-font-family-monospace: ui-monospace, SFMono-Regular, 'SF Mono', Menlo,
+    Consolas, 'Liberation Mono', monospace;
+  --docusaurus-highlighted-code-line-bg: rgba(0, 0, 0, 0.08);
+  --sl-surface: #f4f7fa;
+  --sl-border: rgba(22, 104, 165, 0.18);
+}
+
+[data-theme='dark'] {
+  --ifm-color-primary: #66c0f4;
+  --ifm-color-primary-dark: #4bb3f1;
+  --ifm-color-primary-darker: #3dadf0;
+  --ifm-color-primary-darkest: #159ced;
+  --ifm-color-primary-light: #81cdf7;
+  --ifm-color-primary-lighter: #8fd2f8;
+  --ifm-color-primary-lightest: #b9e3fb;
+  --ifm-background-color: #121a24;
+  --ifm-background-surface-color: #1b2838;
+  --docusaurus-highlighted-code-line-bg: rgba(255, 255, 255, 0.12);
+  --sl-surface: #1b2838;
+  --sl-border: rgba(102, 192, 244, 0.22);
+}
+
+.navbar {
+  border-bottom: 1px solid var(--sl-border);
+}
+
+/* Signature blocks: the `rust` code fence right under an API heading. */
+.markdown h3 + .theme-code-block,
+.markdown h4 + .theme-code-block {
+  margin-top: 0.4rem;
+}
+
+.markdown table {
+  display: table;
+  width: 100%;
+}
+
+.markdown table th {
+  white-space: nowrap;
+}
+
+/* Inline code in tables stays compact. */
+.markdown table code {
+  white-space: nowrap;
+  word-break: keep-all;
+}
+
+/* Source-location badge used at the top of reference pages. */
+.sl-source-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.4rem;
+  padding: 0.15rem 0.6rem;
+  border: 1px solid var(--sl-border);
+  border-radius: 999px;
+  background: var(--sl-surface);
+  font-family: var(--ifm-font-family-monospace);
+  font-size: 0.8rem;
+  text-decoration: none;
+}
+
+.sl-source-badge:hover {
+  text-decoration: none;
+  border-color: var(--ifm-color-primary);
+}
+
+/* Mermaid diagrams get breathing room and a surface to sit on. */
+.docusaurus-mermaid-container {
+  margin: 1.5rem 0;
+  padding: 1rem;
+  border: 1px solid var(--sl-border);
+  border-radius: 10px;
+  background: var(--sl-surface);
+  overflow-x: auto;
+}

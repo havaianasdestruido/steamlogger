@@ -1,0 +1,252 @@
+---
+id: a2s
+title: steamlogger::a2s
+sidebar_label: a2s
+sidebar_position: 7
+description: API reference for the a2s module — the A2S_INFO UDP client, packet layouts, challenge handling and parser behaviour.
+---
+
+# `steamlogger::a2s`
+
+<SourceLink path="src/a2s.rs" lines={331} />
+
+A minimal [A2S_INFO](https://developer.valvesoftware.com/wiki/Server_queries)
+client. Given the `ip:port` Steam reports for your game server, it asks that
+server directly — over UDP, without Steam — for its display name and current
+map.
+
+```rust
+use steamlogger::a2s::{A2sClient, ServerInfo};
+```
+
+## Constants
+
+```rust
+const MAGIC: [u8; 4] = [0xFF, 0xFF, 0xFF, 0xFF];
+const TYPE_STD: u8 = 0x49;        // 'I' — Source info reply
+const TYPE_GOLDSRC: u8 = 0x6D;    // 'm' — GoldSrc info reply
+const TYPE_CHALLENGE: u8 = 0x41;  // 'A' — challenge reply
+const DEFAULT_PORT: u16 = 27015;
+```
+
+All private, listed here because they define the wire format.
+
+## Types
+
+### `ServerInfo` {/* #serverinfo */}
+
+```rust
+#[derive(Debug, Clone, PartialEq)]
+pub struct ServerInfo {
+    pub name: String,
+    pub map: String,
+}
+```
+
+The only two fields SteamLogger keeps from a reply.
+
+| Field | Example | Notes |
+| --- | --- | --- |
+| `name` | `"Team Fortress 2 #42"` | Server display name, decoded lossily from UTF-8 |
+| `map` | `"cp_dustbowl"` | Current map at query time |
+
+Player counts, VAC status, tags and the rest of the payload are parsed past
+but discarded.
+
+### `A2sClient` {/* #a2sclient */}
+
+```rust
+pub struct A2sClient {
+    timeout: Duration, // private — 3 seconds
+}
+```
+
+Holds only a read timeout; it is not a connection. Each
+[`query`](#query) binds a fresh ephemeral UDP socket and drops it when done,
+so the client is cheap to keep around for the whole process (as `main` does).
+
+`Default` is implemented and delegates to [`new`](#new).
+
+## Methods
+
+### `A2sClient::new` {/* #new */}
+
+```rust
+pub fn new() -> Self
+```
+
+Creates a client with a **3-second** read timeout. The field is private and
+has no setter — only the crate's own tests shorten it.
+
+### `A2sClient::query` {/* #query */}
+
+```rust
+pub fn query(&mut self, addr: &str) -> anyhow::Result<ServerInfo>
+```
+
+Perform one A2S_INFO exchange against `addr`.
+
+**Sequence**
+
+1. [`resolve_addr(addr)`](#resolve_addr) → a `SocketAddr`.
+2. `UdpSocket::bind("0.0.0.0:0")` — a random local port.
+3. `set_read_timeout(Some(self.timeout))`.
+4. `connect(target)` — filters replies to that peer.
+5. Send the request payload, receive up to 4096 bytes.
+6. If the reply is a **challenge** (`0x41`), re-send with the challenge value
+   and receive again. A second challenge is a hard error.
+7. [`parse_response`](#parse_response) → `ServerInfo`.
+
+```rust
+use steamlogger::a2s::A2sClient;
+
+let mut client = A2sClient::new();
+match client.query("85.190.8.1:27015") {
+    Ok(info) => println!("{} is playing {}", info.name, info.map),
+    Err(e)   => eprintln!("no reply: {e}"),
+}
+```
+
+**Errors**
+
+| Message | Cause |
+| --- | --- |
+| `could not resolve address <addr>` | DNS/name resolution produced no address |
+| `A2S_INFO query failed: <io error>` | Timeout, ICMP port unreachable, socket error |
+| `A2S challenge packet too short` | Challenge reply shorter than 9 bytes |
+| `server replied to A2S_INFO challenge with another challenge` | Two challenges in a row |
+| `bad A2S packet (wrong magic or too short)` | Reply did not start with `FF FF FF FF` |
+| `unexpected A2S challenge response` | Challenge type reached the parser directly |
+| `unknown A2S packet type 0x<XX>` | Reply type is neither `I` nor `m` |
+
+Callers in SteamLogger never surface these: `enrich::server_and_map` turns any
+`Err` into `(None, None)`.
+
+## Wire format
+
+### Request
+
+```rust
+fn request_payload(challenge: Option<i32>) -> Vec<u8>
+```
+
+| Variant | Bytes |
+| --- | --- |
+| Initial | `FF FF FF FF` + `"TSOURCE\0"` (`54 53 4F 55 52 43 45 00`) |
+| Challenge retry | `FF FF FF FF` + `41` + challenge as 4-byte little-endian |
+
+:::caution Two deliberate deviations from Valve's documented protocol
+1. The canonical A2S_INFO payload is `FF FF FF FF 54` followed by
+   `"Source Engine Query\0"`. This implementation sends the header byte `0x54`
+   (`'T'`) followed by `"SOURCE\0"`, i.e. a shorter, non-standard string.
+2. The canonical challenge retry re-sends the full A2S_INFO request with the
+   4-byte challenge appended; here the retry is `FF FF FF FF 41 <challenge>`.
+
+Many servers answer anyway, which is why enrichment works in practice — but
+strict or heavily modded servers may ignore these packets, in which case
+`server`/`map` are simply omitted from the log. This is the first place to
+look if a specific server never resolves.
+:::
+
+### Reply
+
+```text
+offset  size  field
+0       4     FF FF FF FF        magic
+4       1     'I' | 'm' | 'A'    packet type
+5       1     protocol           (skipped)
+6       var   server name        NUL-terminated
+?       var   map name           NUL-terminated
+…             everything else    ignored
+```
+
+Challenge replies are `FF FF FF FF 41` followed by a 4-byte little-endian
+`i32`.
+
+## Private helpers
+
+### `resolve_addr` {/* #resolve_addr */}
+
+```rust
+fn resolve_addr(addr: &str) -> anyhow::Result<SocketAddr>
+```
+
+Accepts `"ip:port"` directly; if parsing fails, appends `:27015`
+(`DEFAULT_PORT`) and resolves through `ToSocketAddrs`, taking the first
+result. Hostnames therefore work, and a bare IP gets the default Source port.
+
+### `receive_packet` {/* #receive_packet */}
+
+```rust
+fn receive_packet(socket: &UdpSocket, buf: &mut [u8; 4096]) -> anyhow::Result<Vec<u8>>
+```
+
+One `recv` into a 4 KiB buffer, copied into a `Vec`. Multi-packet (split)
+responses are **not** reassembled — only the first datagram is read, which is
+sufficient because `name` and `map` sit at the front of the payload.
+
+### `is_challenge` / `read_challenge` {/* #challenge-helpers */}
+
+```rust
+fn is_challenge(packet: &[u8]) -> bool
+fn read_challenge(packet: &[u8]) -> anyhow::Result<i32>
+```
+
+`is_challenge` checks length ≥ 5, the magic prefix and type `0x41`.
+`read_challenge` requires ≥ 9 bytes and decodes a little-endian `i32`.
+
+### `parse_response` {/* #parse_response */}
+
+```rust
+fn parse_response(packet: &[u8]) -> anyhow::Result<ServerInfo>
+```
+
+Validates magic and length, reads the type byte, skips one protocol byte, then
+reads two NUL-terminated strings as `name` and `map`.
+
+:::warning GoldSrc replies are parsed with the Source layout
+Both `0x49` (Source) and `0x6D` (GoldSrc) take the same branch. In Valve's
+specification a GoldSrc `'m'` reply begins with a NUL-terminated **server
+address** string *before* the name, so a genuine GoldSrc server would yield
+`name = "<address>"` and `map = "<name>"`. The unit test
+`parses_goldsrc_response` crafts a packet in the Source layout, so it does not
+catch the difference. Modern Steam games all use `0x49`.
+:::
+
+### `parse_cstr` {/* #parse_cstr */}
+
+```rust
+fn parse_cstr(buf: &[u8], idx: &mut usize) -> String
+```
+
+Reads bytes up to the next `0x00` (or the end of the buffer), advances `idx`
+past the terminator, and decodes with `String::from_utf8_lossy` — invalid
+bytes become `U+FFFD` rather than failing the whole query, which matters for
+servers with decorated names.
+
+## Tests
+
+9 unit tests in `src/a2s.rs`, including three that run a real UDP server on
+loopback.
+
+| Test | Asserts |
+| --- | --- |
+| `parses_standard_response` | Name and map extracted from a full Source packet |
+| `parses_goldsrc_response` | `0x6D` type accepted by the parser |
+| `rejects_garbage` | Wrong magic, truncated and empty packets error |
+| `handles_utf8_names_lossy` | Invalid UTF-8 in the name does not fail the parse |
+| `round_trip_with_echo_server` | Full query against a loopback UDP server; request bytes verified |
+| `query_without_port_uses_default` | A bare IP resolves to port 27015 |
+| `challenge_round_trip` | Challenge flow completes and returns the info |
+| `challenge_repeat_gives_up` | A second challenge is an error |
+| `query_unreachable_port_errors` | Timeout/unreachable surfaces as an error |
+
+No test touches the public internet.
+
+## See also
+
+- [Enrichment pipeline](../architecture/enrichment-pipeline.mdx#server-and-map)
+  — where the query fits in a tick.
+- [`enrich::server_and_map`](./enrich.mdx#server_and_map) — the only caller.
+- [Valve: Server queries](https://developer.valvesoftware.com/wiki/Server_queries)
+  — the upstream protocol specification.

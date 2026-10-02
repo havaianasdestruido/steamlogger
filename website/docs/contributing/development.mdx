@@ -1,0 +1,140 @@
+---
+id: development
+title: Development
+sidebar_label: Development
+sidebar_position: 1
+description: Build, run, lint and extend SteamLogger — repository layout, dependencies and conventions.
+---
+
+# Development
+
+## Repository layout
+
+```text
+steamlogger/
+├── Cargo.toml                  package, lib + bin targets, dependencies
+├── steamlogger.example.toml    commented example config
+├── src/
+│   ├── main.rs                 binary: poll loop, wiring, Ctrl+C
+│   ├── lib.rs                  library root: pub mod declarations only
+│   ├── config.rs               TOML config + env overrides
+│   ├── model.rs                LogEntry / GameLog JSON types
+│   ├── tracker.rs              session state machine
+│   ├── enrich.rs               friends / lobby / server enrichment
+│   ├── storage.rs              atomic JSON read + write
+│   ├── a2s.rs                  Source A2S_INFO server query
+│   └── steam/
+│       ├── mod.rs              pub mod api; pub mod client;
+│       ├── api.rs              URL builders, types, pure parsers
+│       └── client.rs           blocking HTTP client
+├── tests/
+│   ├── integration.rs          black-box tests against the public API
+│   └── fixtures/               recorded Steam payloads + a sample log
+└── website/                    this documentation site (Docusaurus)
+```
+
+## Everyday commands
+
+```bash
+cargo build                 # debug build
+cargo build --release       # optimised binary at target/release/steamlogger
+cargo run -- config.toml    # run with a specific config
+cargo test                  # 60 unit + 11 integration tests
+cargo fmt                   # rustfmt, default settings
+cargo clippy --all-targets  # lints
+cargo doc --open            # rustdoc for the library API
+```
+
+There is no `rustfmt.toml` or `clippy.toml`: defaults apply.
+
+## Dependencies
+
+| Crate | Version | Features | Why |
+| --- | --- | --- | --- |
+| `anyhow` | 1 | — | Error type plus `.context()` strings used across all modules |
+| `chrono` | 0.4 | `serde` | RFC 3339 local timestamps (`main::now`) |
+| `ctrlc` | 3 | — | `SIGINT` handler feeding an `mpsc` channel |
+| `reqwest` | 0.12 | `blocking`, `json`, `rustls-tls`, **no default features** | HTTPS to the Steam Web API without OpenSSL |
+| `serde` | 1 | `derive` | Config and log types |
+| `serde_json` | 1 | — | JSON parse + pretty print |
+| `toml` | 0.8 | — | Config parsing |
+
+Keep this list short. The design notes below exist largely to avoid needing
+more of it: no async runtime, no logging framework, no CLI parser.
+
+## Conventions
+
+### Modules do one thing
+
+Each module owns a single concern and names it in the file header comment.
+I/O lives in `main`, `steam::client`, `a2s` and `storage`; everything else is
+pure. If a new feature needs the clock, the network or the filesystem, it
+belongs in one of those four — or in a new sibling module, not inside
+`tracker`/`enrich`/`model`.
+
+### Errors carry context, the loop decides
+
+Library functions return `anyhow::Result` with a `.context()` describing the
+*operation* (`fetching player summaries`, `invalid TOML in config file …`).
+Only the binary decides whether an error is fatal — and almost nothing is.
+
+### Optional data is `Option`, never a sentinel
+
+Missing enrichment is `None`/empty, never `""`, `0` or `"unknown"`. The
+serialiser then omits the field entirely.
+
+### Tests next to the code, fixtures for the wire
+
+Unit tests live in a `#[cfg(test)] mod tests` at the bottom of each file and
+use literal payloads; `tests/integration.rs` uses recorded fixtures through
+the public API only. **No test may touch the public internet** — the A2S tests
+spin up a loopback UDP server instead. See
+[Testing](./testing.mdx).
+
+### Public items are documented twice
+
+A `///` doc comment in the source *and* an entry on the matching
+[reference page](../reference/index.mdx). `npm run check:api` in `website/`
+fails the build if a `pub` item has no reference entry — see
+[Documentation workflow](./documentation.mdx#api-coverage-check).
+
+## Adding a feature: a worked path
+
+Suppose you want to record the number of players on the server.
+
+1. **Model** — add `players: Option<u32>` to `LogEntry` with
+   `#[serde(skip_serializing_if = "Option::is_none")]`.
+2. **Protocol** — extend `a2s::parse_response` to read the player count that
+   follows the map/folder/game strings, and add it to `ServerInfo`.
+3. **Enrichment** — carry it through `Enrichment` and
+   `enrich::server_and_map`.
+4. **Tracker** — extend `apply_meta` (or add a dedicated setter) so the field
+   reaches the entry.
+5. **Tests** — a parser test with a crafted packet, a tracker test for the new
+   field, and an assertion in `log_json_shape`.
+6. **Docs** — update [Log format](../output-format.mdx),
+   [`model`](../reference/model.mdx) and [`a2s`](../reference/a2s.mdx); run
+   `npm run check:api`.
+
+## Known issues worth fixing
+
+Documented honestly rather than hidden — each is described in detail on the
+linked page:
+
+| Issue | Where | Impact |
+| --- | --- | --- |
+| Relative `output_file` with a directory component produces a bad temp path | [`storage::write_log`](../reference/storage.mdx#known-edge-case-relative-paths-with-a-parent-directory) | Writes fail until an absolute path is used |
+| A2S request payload uses `"SOURCE\0"` instead of the spec's `"Source Engine Query\0"` | [`a2s`](../reference/a2s.mdx#request) | Strict servers may not answer |
+| GoldSrc (`0x6D`) replies are parsed with the Source field layout | [`a2s::parse_response`](../reference/a2s.mdx#parse_response) | Legacy servers can report a shifted name/map |
+| Sessions are keyed by game *name*, not AppID | [`Tracker::update`](../reference/tracker.mdx#update) | Identically named apps merge |
+| A corrupt log is silently replaced at startup | [`main::run`](../reference/main.mdx#run) | Potential history loss |
+| `cargo test` runs env-var config tests in parallel with others | [`config`](../reference/config.mdx#load) | Theoretical flakiness |
+
+## Release checklist
+
+1. `cargo fmt && cargo clippy --all-targets && cargo test`
+2. Bump `version` in `Cargo.toml`.
+3. Update the docs (log format and reference pages especially) and run
+   `cd website && npm run check`.
+4. Tag and push; the docs workflow publishes the site on the next push to
+   `main`.
