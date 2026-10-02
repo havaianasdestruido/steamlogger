@@ -1,0 +1,290 @@
+---
+id: steam-api
+title: steamlogger::steam::api
+sidebar_label: steam::api
+sidebar_position: 8
+description: API reference for steam::api — domain types, raw JSON shapes, URL builders and pure parsers for the Steam Web API.
+---
+
+# `steamlogger::steam::api`
+
+<SourceLink path="src/steam/api.rs" lines={334} /> <SourceLink path="src/steam/mod.rs" lines={2} />
+
+Everything about the Steam Web API that does **not** require a network: the
+domain types, the raw JSON shapes they are decoded from, the two URL builders,
+and the pure parsing functions. Because nothing here performs I/O, all of it is
+unit-tested against literal payloads.
+
+```rust
+use steamlogger::steam::api::{
+    self, CurrentGame, Friend, PlayerSummary,
+    friend_list_url, parse_friends, parse_player_summaries,
+    player_summaries_url, summary_to_current_game,
+};
+```
+
+```rust title="src/steam/mod.rs"
+pub mod api;
+pub mod client;
+```
+
+## Endpoints used
+
+| Endpoint | Purpose | Builder |
+| --- | --- | --- |
+| `ISteamUser/GetPlayerSummaries/v2` | Current game, lobby, game server, persona names | [`player_summaries_url`](#player_summaries_url) |
+| `ISteamUser/GetFriendList/v1` | SteamIDs of friends | [`friend_list_url`](#friend_list_url) |
+
+Both are GET requests authenticated by an `key` query parameter.
+`GetPlayerSummaries` accepts up to **100** comma-separated SteamIDs per call.
+
+## Domain types
+
+### `CurrentGame` {/* #currentgame */}
+
+```rust
+#[derive(Debug, Clone, PartialEq)]
+pub struct CurrentGame {
+    pub app_id: u32,
+    pub name: String,
+    pub gamedir: Option<String>,
+    pub lobby_steam_id: Option<String>,
+    pub gameserver_ip: Option<String>,
+}
+```
+
+The game a player is currently running.
+
+| Field | Source field | Notes |
+| --- | --- | --- |
+| `app_id` | `gameid` | Parsed from a string; the matching key for `friends_playing` |
+| `name` | `gameextrainfo` | Falls back to `"App <app_id>"`; this is what the tracker uses as session identity |
+| `gamedir` | `gamedir` | e.g. `tf`, `csgo`; carried but unused |
+| `lobby_steam_id` | `lobbysteamid` | Present only for Steam-lobby games |
+| `gameserver_ip` | `gameserverip` | `ip:port`; input to the A2S query |
+
+### `Friend` {/* #friend */}
+
+```rust
+#[derive(Debug, Clone, PartialEq)]
+pub struct Friend {
+    pub steam_id: u64,
+    pub persona_name: String,
+}
+```
+
+A friend-list entry.
+
+:::note `persona_name` is always empty here
+`GetFriendList` returns SteamIDs and relationships only — no names. The field
+exists so a caller can fill it in, and [`parse_friends`](#parse_friends)
+deliberately leaves it as `String::new()`. Names arrive later, via
+`GetPlayerSummaries`.
+:::
+
+### `PlayerSummary` {/* #playersummary */}
+
+```rust
+#[derive(Debug, Clone, PartialEq)]
+pub struct PlayerSummary {
+    pub steam_id: u64,
+    pub persona_name: String,
+    pub game_id: Option<u32>,
+    pub game_extra_info: Option<String>,
+    pub lobby_steam_id: Option<String>,
+    pub gamedir: Option<String>,
+    pub gameserver_ip: Option<String>,
+}
+```
+
+One row of a `GetPlayerSummaries` response, with ids already parsed into
+integers. `game_id == None` means "not in a game" — which also covers players
+whose *Game details* privacy setting hides the information.
+
+## Raw response types {/* #raw-response-types */}
+
+Deserialisation mirrors Steam's JSON exactly, then the raw rows are converted
+to the domain types above.
+
+```rust
+#[derive(Debug, Deserialize)]
+pub struct PlayerSummariesResponse { pub response: PlayerSummariesBody }
+
+#[derive(Debug, Deserialize)]
+pub struct PlayerSummariesBody { pub players: Vec<RawPlayerSummary> }
+
+#[derive(Debug, Clone, Deserialize)]
+pub struct RawPlayerSummary {
+    pub steamid: String,
+    pub personaname: String,
+    #[serde(default)] pub gameid: Option<String>,
+    #[serde(default)] pub gameextrainfo: Option<String>,
+    #[serde(default)] pub lobbysteamid: Option<String>,
+    #[serde(default)] pub gameserverip: Option<String>,
+    #[serde(default)] pub gamedir: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct FriendListResponse { pub friendslist: FriendListBody }
+
+#[derive(Debug, Deserialize)]
+pub struct FriendListBody { pub friends: Vec<RawFriend> }
+
+#[derive(Debug, Clone, Deserialize)]
+pub struct RawFriend { pub steamid: String, pub relationship: String }
+```
+
+Two details worth noting:
+
+- Steam sends numeric ids **as strings**; `steamid`, `gameid` and
+  `lobbysteamid` are all `String` on the wire.
+- Every optional field carries `#[serde(default)]`, so the dozens of profile
+  fields SteamLogger does not care about (avatars, timestamps, clan ids…) are
+  ignored without failing the parse. Real payloads are in
+  [`tests/fixtures/`](https://github.com/havaianasdestruido/steamlogger/tree/main/tests/fixtures).
+
+### `RawPlayerSummary::into_summary` *(private)* {/* #into_summary */}
+
+```rust
+fn into_summary(self) -> Option<PlayerSummary>
+```
+
+Converts one raw row, returning `None` when `steamid` or `gameid` cannot be
+parsed as numbers. [`parse_player_summaries`](#parse_player_summaries) uses
+`filter_map`, so a single malformed row is skipped instead of failing the whole
+response.
+
+## Functions
+
+### `summary_to_current_game` {/* #summary_to_current_game */}
+
+```rust
+pub fn summary_to_current_game(summary: &PlayerSummary) -> Option<CurrentGame>
+```
+
+Projects a summary row into a `CurrentGame` when the player is in a game.
+
+| Condition | Result |
+| --- | --- |
+| `game_id` is `None` | `None` — not playing |
+| `game_extra_info` is `Some(title)` | `CurrentGame` with `name = title` |
+| `game_extra_info` is `None` | `CurrentGame` with `name = format!("App {app_id}")` |
+
+```rust
+let game = summary_to_current_game(&summary).expect("in game");
+assert_eq!(game.app_id, 440);
+assert_eq!(game.name, "Team Fortress 2");
+```
+
+The `"App 440"` fallback keeps a session loggable even when Steam omits the
+title (common for unreleased or restricted apps).
+
+### `player_summaries_url` {/* #player_summaries_url */}
+
+```rust
+pub fn player_summaries_url(key: &str, ids: &[u64]) -> String
+```
+
+```text
+https://api.steampowered.com/ISteamUser/GetPlayerSummaries/v2/?key=KEY&steamids=ID1,ID2
+```
+
+Joins ids with commas. The function does **not** enforce Steam's 100-id limit —
+[`SteamClient::summaries`](./steam-client.mdx#summaries) chunks before calling
+it.
+
+### `friend_list_url` {/* #friend_list_url */}
+
+```rust
+pub fn friend_list_url(key: &str, steam_id: u64) -> String
+```
+
+```text
+https://api.steampowered.com/ISteamUser/GetFriendList/v1/?key=KEY&steamid=ID&relationship=friend
+```
+
+The `relationship=friend` filter is applied server-side; `parse_friends`
+filters again client-side for safety.
+
+:::warning URLs contain your API key
+Both builders interpolate the key directly. Never print a built URL to logs or
+include it in a bug report — the crate itself only ever passes them to
+`reqwest`.
+:::
+
+### `parse_player_summaries` {/* #parse_player_summaries */}
+
+```rust
+pub fn parse_player_summaries(json: &str) -> anyhow::Result<Vec<PlayerSummary>>
+```
+
+Parses a `GetPlayerSummaries` body into domain rows.
+
+- Returns `Err` only when the envelope itself is not valid JSON of the
+  expected shape.
+- Individual rows with unparseable ids are **skipped silently**.
+- Order is preserved as Steam returned it (which is *not* necessarily the
+  order of the requested ids).
+
+```rust
+let rows = parse_player_summaries(r#"{"response":{"players":[]}}"#)?;
+assert!(rows.is_empty());
+```
+
+### `parse_friends` {/* #parse_friends */}
+
+```rust
+pub fn parse_friends(json: &str) -> anyhow::Result<Vec<Friend>>
+```
+
+Parses a `GetFriendList` body, keeping only rows with
+`relationship == "friend"` and a numeric `steamid`. `persona_name` is left
+empty (see [`Friend`](#friend)).
+
+### `entry_to_json` {/* #entry_to_json */}
+
+```rust
+pub fn entry_to_json(entry: &LogEntry) -> String
+```
+
+Serialises a single [`LogEntry`](./model.mdx#logentry) to compact JSON. It is a
+documentation/testing convenience — `storage` does its own pretty-printing of
+the whole log.
+
+:::danger Panics
+`entry_to_json` uses `.expect("LogEntry serialization cannot fail")`. That
+holds for the current `LogEntry` (only `String`s, `Option`s and `Vec`s, no map
+keys that could fail), but it is a genuine panic path if the type ever gains a
+field whose serialisation can error.
+:::
+
+## Tests
+
+10 unit tests in `src/steam/api.rs`, plus 4 integration tests that run the
+parsers over recorded fixtures.
+
+| Test | Asserts |
+| --- | --- |
+| `summary_without_game_is_none` | No `gameid` → not in a game |
+| `summary_to_current_game_maps_fields` | All five fields mapped |
+| `summary_missing_game_extra_info_uses_app_name` | `"App 440"` fallback |
+| `parse_player_summaries_maps_in_game_and_idle_players` | Mixed rows parsed correctly |
+| `parse_player_summaries_empty_players` | Empty array is valid |
+| `parse_player_summaries_garbage_is_error` | Non-JSON errors |
+| `parse_player_summaries_skips_row_with_bad_steamid` | Bad row skipped, good row kept |
+| `parse_friends_filters_non_friends` | `blocked` and unparseable rows dropped |
+| `url_builders_produce_expected_urls` | Exact URL strings |
+| `entry_to_json_round_trips` | Serialise → deserialise is lossless |
+| `parse_player_summaries_fixture` *(integration)* | Real payload: 3 players, lobby ids |
+| `summary_to_current_game_fixture` *(integration)* | Fixture row → full `CurrentGame` |
+| `parse_friends_fixture` *(integration)* | Two friends, empty persona names |
+| `log_json_shape` *(integration)* | `entry_to_json` key sets |
+
+## See also
+
+- [`steam::client`](./steam-client.mdx) — the HTTP layer that uses these
+  builders and parsers.
+- [Enrichment pipeline](../architecture/enrichment-pipeline.mdx) — how the
+  parsed data becomes log fields.
+- [Steam Web API documentation](https://developer.valvesoftware.com/wiki/Steam_Web_API)
+  — upstream reference.

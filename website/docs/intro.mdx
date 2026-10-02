@@ -1,0 +1,144 @@
+---
+id: intro
+title: Introduction
+sidebar_label: Introduction
+sidebar_position: 1
+slug: /intro
+description: What SteamLogger is, what it records, and how this documentation is organised.
+keywords: [steam, logger, rust, session tracking, steam web api, a2s]
+---
+
+# SteamLogger
+
+SteamLogger is a small Rust application that watches one Steam account and
+writes a line in a JSON file for every game session: what you played, when it
+started, when it stopped — and, optionally, **which friends were playing the
+same game**, **which friends shared your lobby**, and the **server name and map**
+you were connected to.
+
+It is a single binary with no database, no daemon framework and no background
+service manager of its own. It polls the
+[Steam Web API](https://steamcommunity.com/dev), keeps a tiny state machine in
+memory, and rewrites one JSON file atomically on every tick.
+
+```json title="steamlog.json"
+{
+  "games": [
+    {
+      "name": "Team Fortress 2",
+      "start": "2026-08-10T14:32:15-03:00",
+      "end": "2026-08-10T16:47:03-03:00",
+      "map": "cp_dustbowl",
+      "server": "Team Fortress 2 #42",
+      "friends_playing": ["medicmain99"],
+      "friends_in_lobby": ["medicmain99"]
+    }
+  ]
+}
+```
+
+## What it does
+
+| Capability | How it is obtained | Module |
+| --- | --- | --- |
+| Detect game start / stop / switch | `ISteamUser/GetPlayerSummaries` polled every *N* seconds | [`tracker`](./reference/tracker.mdx) |
+| Friends playing the same game | `GetFriendList` + batched `GetPlayerSummaries`, matched on `gameid` | [`enrich`](./reference/enrich.mdx) |
+| Friends in your exact lobby | same batch, matched on `lobbysteamid` | [`enrich`](./reference/enrich.mdx) |
+| Server name + current map | direct [A2S_INFO](https://developer.valvesoftware.com/wiki/Server_queries) UDP query to `gameserverip` | [`a2s`](./reference/a2s.mdx) |
+| Crash-safe log file | pretty JSON written to a temp file, then renamed over the target | [`storage`](./reference/storage.mdx) |
+| Resume after restart | last entry with `end: null` is treated as still running | [`tracker`](./reference/tracker.mdx) |
+
+## What it does not do
+
+- It does not read local Steam files, inject into games, or use your password —
+  only a read-only Web API key and a public SteamID64.
+- It does not track playtime for *other* people; friends are only recorded as
+  names attached to *your* sessions.
+- It does not retry failed polls faster, back off, or queue writes. A failed
+  poll is logged to stderr and the next tick simply tries again.
+- It does not rotate or prune the log file; the whole file is rewritten each
+  tick.
+
+## The 60-second tour
+
+```mermaid
+flowchart LR
+  A["main.rs<br/>poll loop"] -->|every N seconds| B["SteamClient<br/>current_game()"]
+  B -->|Some(game)| C["Tracker<br/>start / running / switch"]
+  B -->|None| D["Tracker<br/>end_active()"]
+  C --> E{"enrich = true?"}
+  E -->|yes| F["enrich::analyze()"]
+  F --> G["friends playing<br/>friends in lobby"]
+  F --> H["A2sClient::query()<br/>server + map"]
+  E -->|no| I
+  G --> I["Tracker::apply_meta()"]
+  H --> I
+  C --> I
+  D --> I
+  I --> J["storage::write_log()<br/>temp file + rename"]
+```
+
+Read [Architecture → Overview](./architecture/overview.mdx) for the full
+picture, or [The poll loop](./architecture/poll-loop.mdx) for a tick-by-tick
+walkthrough.
+
+## How this documentation is organised
+
+<div className="row">
+  <div className="col col--6" style={{marginBottom: '1rem'}}>
+
+**[Getting started](./getting-started/installation.mdx)**
+Install the toolchain, get an API key, write a config, run the binary, and keep
+it running in the background on Linux, macOS or Windows.
+
+  </div>
+  <div className="col col--6" style={{marginBottom: '1rem'}}>
+
+**[Configuration](./configuration.mdx) & [Log format](./output-format.mdx)**
+Every TOML key, every environment variable, every JSON field — with types,
+defaults, validation rules and worked examples.
+
+  </div>
+  <div className="col col--6" style={{marginBottom: '1rem'}}>
+
+**[Architecture](./architecture/overview.mdx)**
+How the modules fit together, what happens on each tick, the session state
+machine, the enrichment pipeline, and the failure model.
+
+  </div>
+  <div className="col col--6" style={{marginBottom: '1rem'}}>
+
+**[Code reference](./reference/index.mdx)**
+One page per module. Every public type and function, its signature, behaviour,
+error cases, and the tests that cover it.
+
+  </div>
+  <div className="col col--6" style={{marginBottom: '1rem'}}>
+
+**[Guides](./guides/querying-the-log.mdx)**
+Practical recipes: querying the log with `jq`, and using `steamlogger` as a
+library crate from your own Rust code.
+
+  </div>
+  <div className="col col--6" style={{marginBottom: '1rem'}}>
+
+**[Contributing](./contributing/development.mdx)**
+Local development, the full test inventory, and how to edit these docs.
+
+  </div>
+</div>
+
+## Requirements at a glance
+
+- **Rust 1.75+** with `cargo` ([install](./getting-started/installation.mdx)).
+- A free **[Steam Web API key](https://steamcommunity.com/dev/apikey)**.
+- Your numeric **SteamID64**, and a Steam profile whose *game details* are
+  public — otherwise the API reports nothing to log.
+- Outbound HTTPS to `api.steampowered.com`, plus outbound UDP if you want
+  server/map enrichment.
+
+:::tip Privacy note
+`steamlogger.toml` holds your API key and `steamlog.json` holds your play
+history. Both are already listed in the repository `.gitignore` — keep them
+out of commits.
+:::

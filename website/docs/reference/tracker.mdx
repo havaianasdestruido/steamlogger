@@ -1,0 +1,263 @@
+---
+id: tracker
+title: steamlogger::tracker
+sidebar_label: tracker
+sidebar_position: 4
+description: API reference for the tracker module — the Tracker state machine, SessionEvent, and every transition rule.
+---
+
+# `steamlogger::tracker`
+
+<SourceLink path="src/tracker.rs" lines={259} />
+
+The session state machine: it converts a sequence of "this is running right
+now" observations into a list of `LogEntry` values with start and end
+timestamps. Pure in-memory logic — no clock, no I/O, no network — which is why
+its tests pass timestamps like `"T0"`.
+
+```rust
+use steamlogger::tracker::{SessionEvent, Tracker};
+```
+
+The narrative version of this page is
+[Session lifecycle](../architecture/session-lifecycle.mdx).
+
+## Types
+
+### `SessionEvent` {/* #sessionevent */}
+
+```rust
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SessionEvent {
+    Started(usize),
+    Running(usize),
+    Ended,
+    Idle,
+}
+```
+
+What happened during one poll tick.
+
+| Variant | Payload | Meaning |
+| --- | --- | --- |
+| `Started(i)` | index in `games` | A new session began (first start, or a switch from another game) |
+| `Running(i)` | index in `games` | The same game is still running; nothing changed |
+| `Ended` | — | The active session was closed |
+| `Idle` | — | Nothing was running before or after |
+
+`Copy` and `Eq` make the enum cheap to compare in tests and in consumer code.
+
+### `Tracker` {/* #tracker */}
+
+```rust
+pub struct Tracker {
+    log: GameLog,                // private
+    active_index: Option<usize>, // private
+}
+```
+
+Owns the in-memory log and the index of the currently open entry. Both fields
+are private; the accessors below are the whole surface.
+
+**Invariants**
+
+- `active_index == Some(i)` implies `log.games[i].end.is_none()`.
+- Entries are only ever appended, never removed or reordered.
+- `close_at` never overwrites an existing `end`, so a closed entry's end time
+  is final.
+
+## Methods
+
+### `Tracker::new` {/* #new */}
+
+```rust
+pub fn new(log: GameLog) -> Self
+```
+
+Adopts an existing log and derives the active state from it:
+
+```rust
+let active_index = log.games.last().and_then(|last| match last.end {
+    Some(_) => None,
+    None => log.games.len().checked_sub(1),
+});
+```
+
+| Input log | Resulting `active_index` |
+| --- | --- |
+| Empty | `None` |
+| Last entry has `end` | `None` |
+| Last entry has no `end` | `Some(len - 1)` — the session is **resumed** |
+
+Only the last entry is examined. Earlier entries missing `end` (from
+hand-editing) stay as they are forever.
+
+### `Tracker::update` {/* #update */}
+
+```rust
+pub fn update(&mut self, game: &CurrentGame, now: &str) -> SessionEvent
+```
+
+Feed the currently observed game. `now` is an opaque timestamp string, written
+verbatim into `start`/`end`.
+
+| State | Condition | Action | Returns |
+| --- | --- | --- | --- |
+| No active session | — | Push `LogEntry::new(game.name, now)` | `Started(new_index)` |
+| Active, same `name` | `log.games[i].name == game.name` | Nothing | `Running(i)` |
+| Active, different `name` | — | Close entry `i` with `end = now`, push a new entry with `start = now` | `Started(new_index)` |
+
+```rust
+use steamlogger::model::GameLog;
+use steamlogger::steam::api::CurrentGame;
+use steamlogger::tracker::{SessionEvent, Tracker};
+
+let mut t = Tracker::new(GameLog::default());
+let tf2 = CurrentGame { app_id: 440, name: "Team Fortress 2".into(),
+                        gamedir: None, lobby_steam_id: None, gameserver_ip: None };
+
+assert_eq!(t.update(&tf2, "T0"), SessionEvent::Started(0));
+assert_eq!(t.update(&tf2, "T1"), SessionEvent::Running(0));
+assert!(t.log().games[0].end.is_none());
+```
+
+:::warning Sessions are identified by `name`, not `app_id`
+The comparison is `self.log.games[index].name == game.name`. Two apps that
+report identical titles merge into one session; a title that changes mid-run
+registers as a switch. `CurrentGame::app_id` is carried through the pipeline
+but never used for identity.
+:::
+
+### `Tracker::end_active` {/* #end_active */}
+
+```rust
+pub fn end_active(&mut self, now: &str) -> SessionEvent
+```
+
+Close the active session — called when a poll reports that nothing is running.
+
+| State | Action | Returns |
+| --- | --- | --- |
+| Active | Stamp `end = now`, clear `active_index` | `Ended` |
+| Idle | Nothing | `Idle` |
+
+Idempotent: calling it twice leaves the first `end` value in place.
+
+### `Tracker::apply_meta` {/* #apply_meta */}
+
+```rust
+pub fn apply_meta(
+    &mut self,
+    index: usize,
+    map: Option<&str>,
+    server: Option<&str>,
+    friends_playing: &[String],
+    friends_in_lobby: &[String],
+) -> anyhow::Result<()>
+```
+
+Overwrite the four enrichment fields of entry `index`.
+
+- Values are **replaced, not merged** — passing `None`/`&[]` clears a field.
+- Empty slices are stored as `None` so empty arrays never reach the JSON:
+  ```rust
+  entry.friends_playing = (!friends_playing.is_empty()).then(|| friends_playing.to_vec());
+  ```
+- The lists are written exactly as given; sorting and de-duplication happen
+  upstream in [`enrich`](./enrich.mdx).
+
+**Errors** — `entry index <index> out of bounds` when `index >= games.len()`.
+This is the only fallible method on `Tracker`; `main` avoids it by passing
+[`active_index()`](#active_index).
+
+```rust
+t.apply_meta(0, Some("cp_dustbowl"), Some("TF2 #42"),
+             &["alice".to_string()], &[])?;
+let e = &t.log().games[0];
+assert_eq!(e.map.as_deref(), Some("cp_dustbowl"));
+assert!(e.friends_in_lobby.is_none()); // empty slice → None
+```
+
+### `Tracker::log` {/* #log */}
+
+```rust
+pub fn log(&self) -> &GameLog
+```
+
+Borrow the current log — what `main` hands to
+[`storage::write_log`](./storage.mdx#write_log) every tick.
+
+### `Tracker::into_log` {/* #into_log */}
+
+```rust
+pub fn into_log(self) -> GameLog
+```
+
+Consume the tracker and take ownership of the log. Used once, for the final
+write at shutdown.
+
+### `Tracker::active_index` {/* #active_index */}
+
+```rust
+pub fn active_index(&self) -> Option<usize>
+```
+
+Index of the open entry, if any. `None` means no session is in progress.
+
+### `close_at` *(private)* {/* #close_at */}
+
+```rust
+fn close_at(&mut self, index: usize, now: &str)
+```
+
+Stamps `end = now` **only if `end` is currently `None`**. This guard is what
+makes `end_active` idempotent and protects historical entries from being
+rewritten.
+
+:::danger Panics
+`close_at` indexes `self.log.games[index]` directly and will panic on an
+out-of-bounds index. It is private and only ever called with an index that
+came from `active_index`, which the type's invariants keep valid.
+:::
+
+## Usage pattern
+
+```rust
+use steamlogger::{model::GameLog, storage, tracker::Tracker};
+
+let mut tracker = Tracker::new(storage::read_log(path)?);
+
+// one tick
+match client.current_game(steam_id)? {
+    Some(game) => { tracker.update(&game, &now); }
+    None       => { tracker.end_active(&now); }
+}
+storage::write_log(path, tracker.log())?;
+```
+
+## Tests {/* #tests */}
+
+10 unit tests in `src/tracker.rs` and 2 integration tests, one per transition
+and edge case:
+
+| Test | Covers |
+| --- | --- |
+| `empty_tracker_starts_idle` | `new` with an empty log |
+| `start` | Idle → `Started(0)`, fields initialised |
+| `running` | No mutation on repeat observation |
+| `switch` | Old entry closed, new entry opened at the same timestamp |
+| `end` | `Ended` then `Idle`; the first `end` is kept |
+| `resume` | Open last entry is adopted, not duplicated |
+| `closed_last_entry_not_resumed` | Closed last entry → idle |
+| `apply_meta` | Set, then clear; empty lists become `None` |
+| `apply_meta_out_of_bounds` | Error message contains `out of bounds` |
+| `into_log_returns_underlying` | Ownership transfer keeps all data |
+| `tracker_end_to_end` *(integration)* | start → running → meta → switch → end |
+| `tracker_resume_closes_open_session` *(integration)* | Restart mid-session |
+
+## See also
+
+- [Session lifecycle](../architecture/session-lifecycle.mdx) — diagrams and
+  worked timelines.
+- [`model`](./model.mdx) — the entries this module creates.
+- [`enrich`](./enrich.mdx) — the source of `apply_meta`'s arguments.

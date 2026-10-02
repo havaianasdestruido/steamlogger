@@ -1,0 +1,182 @@
+---
+id: running-continuously
+title: Running continuously
+sidebar_label: Running continuously
+sidebar_position: 3
+description: Keep SteamLogger running in the background with systemd, launchd, Windows Task Scheduler, or a container.
+---
+
+# Running continuously
+
+SteamLogger is a foreground process that loops until it receives
+<kbd>Ctrl</kbd>+<kbd>C</kbd>. To record sessions unattended, hand it to your
+platform's service manager.
+
+Three facts shape every recipe below:
+
+1. **Working directory matters.** With no argument the config is read from
+   `steamlogger.toml` *relative to the working directory*, and a relative
+   `output_file` is resolved the same way. Service managers rarely start you
+   where you think — pass absolute paths.
+2. **It writes the whole log on every tick.** Point `output_file` at fast local
+   storage, not a network share.
+3. **Stopping is safe at any moment.** The write is atomic (temp file +
+   rename), and an unfinished session is resumed on the next start.
+
+## Linux — systemd user service
+
+A *user* service (not system-wide) runs as your login user, which is what you
+want for a per-account logger.
+
+```ini title="~/.config/systemd/user/steamlogger.service"
+[Unit]
+Description=SteamLogger — logs Steam sessions to JSON
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+WorkingDirectory=%h/.local/share/steamlogger
+ExecStart=%h/.cargo/bin/steamlogger %h/.config/steamlogger/config.toml
+# api_key comes from the environment here; steam_id (and any optional keys)
+# must be set in config.toml — or add Environment=STEAMLOGGER_STEAM_ID=...
+Environment=STEAMLOGGER_API_KEY=xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx
+Restart=on-failure
+RestartSec=10
+# Ctrl+C equivalent: systemd sends SIGINT, which the ctrlc handler catches
+# and turns into a clean final write.
+KillSignal=SIGINT
+TimeoutStopSec=20
+
+[Install]
+WantedBy=default.target
+```
+
+```bash
+mkdir -p ~/.config/steamlogger ~/.local/share/steamlogger
+systemctl --user daemon-reload
+systemctl --user enable --now steamlogger
+systemctl --user status steamlogger
+journalctl --user -u steamlogger -f     # stdout/stderr land here
+loginctl enable-linger "$USER"          # keep running after logout
+```
+
+:::tip Keep the key out of the unit file
+`systemctl --user show steamlogger` prints `Environment=` values. Use
+`EnvironmentFile=%h/.config/steamlogger/env` with `chmod 600` instead, or put
+`api_key` in the TOML file (also `chmod 600`).
+:::
+
+### Why `KillSignal=SIGINT`
+
+`ctrlc::set_handler` installs a handler for `SIGINT` (and `SIGTERM` is *not*
+handled). With the default `KillSignal=SIGTERM` the process is terminated
+without running the final write — not corrupting, but losing the last
+in-memory state. The per-tick write means you lose at most one interval
+either way.
+
+## macOS — launchd agent
+
+```xml title="~/Library/LaunchAgents/dev.steamlogger.plist"
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN"
+  "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <key>Label</key>              <string>dev.steamlogger</string>
+  <key>ProgramArguments</key>
+  <array>
+    <string>/Users/you/.cargo/bin/steamlogger</string>
+    <string>/Users/you/Library/Application Support/SteamLogger/config.toml</string>
+  </array>
+  <key>WorkingDirectory</key>   <string>/Users/you/Library/Application Support/SteamLogger</string>
+  <key>RunAtLoad</key>          <true/>
+  <key>KeepAlive</key>          <true/>
+  <key>StandardOutPath</key>    <string>/Users/you/Library/Logs/steamlogger.out.log</string>
+  <key>StandardErrorPath</key>  <string>/Users/you/Library/Logs/steamlogger.err.log</string>
+</dict>
+</plist>
+```
+
+```bash
+launchctl load -w ~/Library/LaunchAgents/dev.steamlogger.plist
+launchctl list | grep steamlogger
+```
+
+## Windows — Task Scheduler
+
+```powershell
+$exe  = "$env:USERPROFILE\.cargo\bin\steamlogger.exe"
+$cfg  = "$env:APPDATA\SteamLogger\config.toml"
+$work = "$env:APPDATA\SteamLogger"
+
+$action  = New-ScheduledTaskAction -Execute $exe -Argument "`"$cfg`"" -WorkingDirectory $work
+$trigger = New-ScheduledTaskTrigger -AtLogOn
+$settings = New-ScheduledTaskSettingsSet -AllowStartIfOnBatteries `
+    -DontStopIfGoingOnBatteries -RestartCount 3 -RestartInterval (New-TimeSpan -Minutes 1)
+
+Register-ScheduledTask -TaskName "SteamLogger" -Action $action -Trigger $trigger `
+    -Settings $settings -Description "Logs Steam sessions to JSON"
+```
+
+Run it hidden by wrapping the call in a shortcut with "Run: Minimized", or use
+`-WindowStyle Hidden` in a small launcher script.
+
+## Containers
+
+A container works, but remember the process only needs outbound network — it
+never listens:
+
+```dockerfile title="Dockerfile"
+FROM rust:1.75-slim AS build
+WORKDIR /src
+COPY . .
+RUN cargo build --release
+
+FROM debian:stable-slim
+RUN useradd -m app && mkdir -p /data && chown app /data
+USER app
+WORKDIR /data
+COPY --from=build /src/target/release/steamlogger /usr/local/bin/steamlogger
+VOLUME ["/data"]
+ENTRYPOINT ["steamlogger", "/data/config.toml"]
+```
+
+```bash
+docker run -d --name steamlogger \
+  -e STEAMLOGGER_API_KEY=xxxxxxxx \
+  -e STEAMLOGGER_STEAM_ID=76561198000000000 \
+  -v "$PWD/data:/data" \
+  --stop-signal SIGINT \
+  steamlogger
+```
+
+`--stop-signal SIGINT` gives the same clean-shutdown benefit as the systemd
+setting above. Mount `/data` so the log survives container replacement.
+
+## Choosing a poll interval
+
+| Interval | Session edge accuracy | Steam API calls/day (no enrichment) | With enrichment (1 friend page) |
+| --- | --- | --- | --- |
+| `5` (the floor) | ±5 s | ~17 280 | ~34 560 |
+| `15` | ±15 s | ~5 760 | ~11 520 |
+| `30` *(default)* | ±30 s | ~2 880 | ~5 760 |
+| `60` | ±1 min | ~1 440 | ~2 880 |
+| `300` | ±5 min | ~288 | ~576 |
+
+Values below `5` are clamped to 5 seconds by
+[`main::run`](../reference/main.mdx#run). Steam's documented courtesy limit is
+100 000 calls per key per day, so even the floor stays well inside it — but be
+polite, and remember that both `start` and `end` timestamps are only as precise
+as the interval. Details in [The poll loop](../architecture/poll-loop.mdx#cost-per-tick).
+
+## Operational checklist
+
+- [ ] Absolute paths for both the config argument and `output_file`.
+- [ ] Config file readable only by you (`chmod 600 steamlogger.toml`).
+- [ ] Service restarts on failure; the process exits non-zero only on config
+      errors, which restarting will not fix — check the logs after a crash loop.
+- [ ] Back up `steamlog.json` periodically; it is the only copy of your history.
+- [ ] If the log is ever hand-edited, keep it valid JSON. An unreadable log is
+      silently replaced with an empty one at startup
+      ([why](../architecture/resilience.mdx#startup-read-failures-are-swallowed)).

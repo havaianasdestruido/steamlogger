@@ -1,0 +1,191 @@
+---
+id: storage
+title: steamlogger::storage
+sidebar_label: storage
+sidebar_position: 6
+description: API reference for the storage module — read_log, write_log, the atomic write strategy and its known edge case.
+---
+
+# `steamlogger::storage`
+
+<SourceLink path="src/storage.rs" lines={210} />
+
+Reads and writes the JSON log. Two public functions, one private helper, and
+one rule: **the target file is never partially written**.
+
+```rust
+use steamlogger::storage;
+```
+
+## Functions
+
+### `read_log` {/* #read_log */}
+
+```rust
+pub fn read_log(path: &Path) -> anyhow::Result<GameLog>
+```
+
+Load a log file, tolerating two shapes and one absence.
+
+| Input | Result |
+| --- | --- |
+| `path` does not exist | `Ok(GameLog::default())` — an empty log |
+| Content starts with `[` (after leading whitespace) | Parsed as `Vec<LogEntry>` and wrapped into `GameLog { games }` |
+| Any other content | Parsed as `GameLog` (`{"games": [...]}`) |
+| Unreadable file | `Err` from `std::fs::read_to_string` |
+| Invalid JSON | `Err` with context `malformed JSON log in <path>` (or `malformed JSON log array in <path>` for the array form) |
+
+```rust
+let log = storage::read_log(Path::new("steamlog.json"))?;
+println!("{} sessions", log.games.len());
+```
+
+The bare-array form exists so hand-written or migrated files like
+
+```json
+[{"name": "Quake", "start": "2026-08-05T08:00:00-03:00"}]
+```
+
+load without conversion. They are rewritten in the envelope form on the next
+save.
+
+:::danger `main` discards this error
+The binary calls `storage::read_log(&config.output_file).unwrap_or_default()`,
+so a corrupt log starts an **empty** session list and the first write replaces
+the damaged file. Library users who care about their history should match on
+the `Err` instead — see
+[Resilience](../architecture/resilience.mdx#startup-read-failures-are-swallowed).
+:::
+
+### `write_log` {/* #write_log */}
+
+```rust
+pub fn write_log(path: &Path, log: &GameLog) -> anyhow::Result<()>
+```
+
+Serialise the whole log and atomically replace `path`.
+
+**Steps**
+
+1. `serde_json::to_string_pretty(log)` — two-space indentation.
+2. Append a trailing `\n` (so the file is POSIX-friendly and diff-friendly).
+3. `create_dir_all(parent)` when `path` has a non-empty parent — missing
+   directories are created for you.
+4. Write everything to [`temp_path(path)`](#temp_path) — `<path>.tmp`.
+5. `std::fs::rename(tmp, path)` — the atomic swap.
+
+**Errors** — JSON serialisation (practically impossible for these types),
+`create_dir_all`, the temp write, or the rename. All are returned as `anyhow`
+errors; `main` prints `failed to save log: …` and continues.
+
+```rust
+use steamlogger::{model::{GameLog, LogEntry}, storage};
+use std::path::Path;
+
+let mut log = GameLog::default();
+log.games.push(LogEntry::new("Portal".into(), "2026-08-02T09:00:00-03:00".into()));
+storage::write_log(Path::new("/var/lib/steamlogger/steamlog.json"), &log)?;
+```
+
+Output:
+
+```json title="steamlog.json"
+{
+  "games": [
+    {
+      "name": "Portal",
+      "start": "2026-08-02T09:00:00-03:00"
+    }
+  ]
+}
+```
+
+#### Why temp + rename
+
+`rename(2)` is atomic within a filesystem on Unix, and `std::fs::rename` maps
+to `MoveFileExW` with `MOVEFILE_REPLACE_EXISTING` on Windows. A reader
+therefore always observes a complete file — either the old one or the new one.
+Writing in place would leave a truncated, unparseable log if the process died
+mid-write, which for a program that writes every 30 seconds is a real risk.
+
+:::note No `fsync`, and the temp file must share the filesystem
+`write_log` does not call `sync_all()` on the file or its directory, so a
+power loss can still lose the newest write (never corrupt the old one). The
+temp file is created next to the target, which also guarantees the rename
+stays within one filesystem.
+:::
+
+#### Known edge case: relative paths with a parent directory {/* #known-edge-case-relative-paths-with-a-parent-directory */}
+
+[`temp_path`](#temp_path) builds the temp name by appending `.tmp` to the
+**whole path string** and then calling `Path::with_file_name`:
+
+```rust
+fn temp_path(path: &Path) -> std::path::PathBuf {
+    let mut name = path.as_os_str().to_owned();
+    name.push(".tmp");
+    path.with_file_name(name)
+}
+```
+
+`with_file_name` pops the last component and pushes the new name. Pushing an
+**absolute** path replaces the buffer entirely, so absolute targets work; a
+bare filename has no parent, so it works too. A *relative* path **with** a
+directory component is the odd one out:
+
+| `path` | Temp path produced | Works? |
+| --- | --- | --- |
+| `steamlog.json` | `steamlog.json.tmp` | ✅ |
+| `/var/lib/steamlogger/steamlog.json` | `/var/lib/steamlogger/steamlog.json.tmp` | ✅ |
+| `logs/steamlog.json` | `logs/logs/steamlog.json.tmp` | ❌ directory does not exist → write fails |
+
+The existing test `nested_parent_dir_created` passes because it uses an
+absolute path under the temp directory. Until this is fixed, configure
+`output_file` as either a bare filename or an absolute path — the
+[configuration guide](../configuration.mdx#choosing-output_file) recommends the
+same.
+
+### `temp_path` *(private)* {/* #temp_path */}
+
+```rust
+fn temp_path(path: &Path) -> std::path::PathBuf
+```
+
+Returns the sibling temp file name used by [`write_log`](#write_log) — see the
+edge case above. The unit test `no_stray_temp_file_after_write` asserts that no
+`.tmp` file survives a successful write.
+
+## Behavioural summary
+
+| Property | Guarantee |
+| --- | --- |
+| Partial writes | Impossible — temp + rename |
+| Concurrent writers | Unprotected: last writer wins, no locking |
+| Parent directories | Created automatically on write |
+| Formatting | Pretty, two-space indent, trailing newline |
+| Field omission | Optional fields with `None` are not written |
+| Read tolerance | Missing file, envelope form, or bare array |
+
+## Tests
+
+8 unit tests in `src/storage.rs`, plus `storage_roundtrip_temp` in the
+integration suite.
+
+| Test | Asserts |
+| --- | --- |
+| `missing_file_reads_empty` | No file → empty log, no error |
+| `round_trip_preserves_entry` | All seven fields survive write → read |
+| `pretty_output_with_skipped_optionals` | Indented output, absent optionals, trailing newline |
+| `overwrite_replaces_old_log` | A second write fully replaces the first |
+| `no_stray_temp_file_after_write` | `.tmp` is gone after a successful write |
+| `malformed_json_is_error` | Garbage content → `Err` |
+| `bare_array_is_normalized` | Top-level array is wrapped into `games` |
+| `nested_parent_dir_created` | Missing parent directories are created |
+| `storage_roundtrip_temp` *(integration)* | Full entry round trip through the public API |
+
+## See also
+
+- [Log format](../output-format.mdx) — the schema this module persists.
+- [`model`](./model.mdx) — the types being serialised.
+- [Resilience](../architecture/resilience.mdx#atomic-writes) — durability in
+  the broader failure model.

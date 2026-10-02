@@ -1,0 +1,167 @@
+---
+id: main
+title: Binary — main
+sidebar_label: main (binary)
+sidebar_position: 1
+description: Reference for src/main.rs — argument handling, the poll loop, Ctrl+C handling, timestamps and exit codes.
+---
+
+# Binary: `main`
+
+<SourceLink path="src/main.rs" lines={98} />
+
+The binary target. It owns everything the library deliberately avoids: command
+line arguments, the wall clock, signal handling, stdout/stderr and the loop
+that drives one tick after another.
+
+```rust
+use steamlogger::a2s::A2sClient;
+use steamlogger::config;
+use steamlogger::enrich;
+use steamlogger::steam::client::SteamClient;
+use steamlogger::storage;
+use steamlogger::tracker::Tracker;
+```
+
+## Functions
+
+### `main` {/* #main */}
+
+```rust
+fn main() -> ExitCode
+```
+
+Resolves the config path and hands off to [`run`](#run).
+
+| Step | Behaviour |
+| --- | --- |
+| Config path | `std::env::args().nth(1)`, falling back to `steamlogger.toml` in the working directory |
+| Load | [`config::load`](./config.mdx#load) |
+| On error | Prints `failed to load config from <path>: <error chain>` plus the hint `copy steamlogger.example.toml to steamlogger.toml and fill it in`, returns `ExitCode::FAILURE` |
+
+The error is formatted with `{e:#}`, so the whole `anyhow` context chain is
+printed on one line.
+
+### `run` {/* #run */}
+
+```rust
+fn run(config: &config::Config) -> ExitCode
+```
+
+The poll loop. Builds the clients, restores previous state, installs the
+`SIGINT` handler, then loops until interrupted.
+
+**Setup**
+
+```rust
+let client = SteamClient::new(config.api_key.clone());
+let mut a2s = A2sClient::new();
+let mut tracker = Tracker::new(storage::read_log(&config.output_file).unwrap_or_default());
+let interval = Duration::from_secs(config.poll_interval_secs.max(5));
+```
+
+| Element | Value |
+| --- | --- |
+| HTTP timeout | 10 s (`SteamClient::new`) |
+| UDP read timeout | 3 s (`A2sClient::new`) |
+| Interval floor | `max(poll_interval_secs, 5)` — **configured values below 5 are clamped** |
+| Startup log read | `unwrap_or_default()` — a corrupt log silently becomes an empty one |
+| Shutdown channel | `std::sync::mpsc::channel::<()>()`; the `ctrlc` handler sends `()` |
+
+If `ctrlc::set_handler` fails, `run` prints `failed to install Ctrl+C handler:
+<e>` and returns `ExitCode::FAILURE`.
+
+**Each iteration**
+
+1. `rx.try_recv()` — break out if a shutdown signal is already queued.
+2. `client.current_game(config.steam_id)`:
+   - `Ok(Some(game))` → `tracker.update(&game, &now())`, then enrichment when
+     `config.enrich` is true.
+   - `Ok(None)` → `tracker.end_active(&now())`.
+   - `Err(e)` → `eprintln!("poll error: {e}")`, no state change.
+3. Enrichment (only with an active index):
+   ```rust
+   let info = enrich::analyze(&client, &mut a2s, config.steam_id, &game);
+   if let Some(idx) = tracker.active_index() {
+       if let Err(e) = tracker.apply_meta(idx, info.map.as_deref(), info.server.as_deref(),
+                                          &info.friends_playing, &info.friends_in_lobby) {
+           eprintln!("enrichment failed: {e}");
+       }
+   }
+   ```
+4. `storage::write_log(&config.output_file, tracker.log())`; failures print
+   `failed to save log: {e}` and are otherwise ignored.
+5. `rx.recv_timeout(interval)` — an interruptible sleep.
+
+**Shutdown**
+
+```rust
+if let Err(e) = storage::write_log(&config.output_file, &tracker.into_log()) {
+    eprintln!("failed to save log: {e}");
+}
+println!("stopped");
+ExitCode::SUCCESS
+```
+
+:::note The `SessionEvent` return values are discarded
+Both `tracker.update(...)` and `tracker.end_active(...)` are bound to
+`let _event = …`. The binary does not react to transitions; the values exist
+for testability and for library consumers.
+:::
+
+### `now` {/* #now */}
+
+```rust
+fn now() -> String
+```
+
+The only clock in the program.
+
+```rust
+chrono::Local::now().to_rfc3339_opts(chrono::SecondsFormat::Secs, false)
+```
+
+- Local timezone with an explicit offset: `2026-08-10T14:32:15-03:00`.
+- Second precision (`SecondsFormat::Secs`).
+- `use_z = false`, so UTC renders as `+00:00` rather than `Z`.
+
+Passing the timestamp as a `&str` into the tracker is what keeps
+[`tracker`](./tracker.mdx) free of time dependencies and trivially testable
+with values like `"T0"`.
+
+## Exit codes
+
+| Code | Constant | Cause |
+| --- | --- | --- |
+| `0` | `ExitCode::SUCCESS` | Clean shutdown after <kbd>Ctrl</kbd>+<kbd>C</kbd> |
+| `1` | `ExitCode::FAILURE` | Config load failure, or `SIGINT` handler installation failure |
+
+## Output
+
+| Stream | Message |
+| --- | --- |
+| stdout | `SteamLogger running. Log file: <path>  (Ctrl+C to stop)` |
+| stdout | `stopped` |
+| stderr | `failed to load config from <path>: <error>` |
+| stderr | `copy steamlogger.example.toml to steamlogger.toml and fill it in` |
+| stderr | `failed to install Ctrl+C handler: <error>` |
+| stderr | `poll error: <error>` |
+| stderr | `enrichment failed: <error>` |
+| stderr | `failed to save log: <error>` |
+
+## Tests
+
+`src/main.rs` has no unit tests — it is pure wiring. Its behaviour is covered
+indirectly: the loop's building blocks (`config`, `tracker`, `enrich`,
+`storage`, `steam::api`) each have their own suites, and
+`tests/integration.rs` exercises the same sequence of calls end to end. See
+the [test inventory](../contributing/testing.mdx).
+
+## See also
+
+- [The poll loop](../architecture/poll-loop.mdx) — narrative walkthrough with
+  costs and timing.
+- [Resilience](../architecture/resilience.mdx) — what each error path degrades
+  to.
+- [Running continuously](../getting-started/running-continuously.mdx) — signal
+  handling under service managers.

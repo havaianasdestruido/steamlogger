@@ -1,0 +1,199 @@
+---
+id: library-usage
+title: Using SteamLogger as a library
+sidebar_label: Library usage
+sidebar_position: 2
+description: Depend on the steamlogger crate from your own Rust code — read logs, build a custom poll loop, or reuse the A2S client.
+---
+
+# Using SteamLogger as a library
+
+`Cargo.toml` declares both a `[lib]` and a `[[bin]]` target, so everything the
+binary does is available to your own code:
+
+```rust title="src/lib.rs"
+pub mod a2s;
+pub mod config;
+pub mod enrich;
+pub mod model;
+pub mod steam;
+pub mod storage;
+pub mod tracker;
+```
+
+Add it as a path or git dependency (the crate is not published to crates.io):
+
+```toml title="Cargo.toml"
+[dependencies]
+steamlogger = { git = "https://github.com/havaianasdestruido/steamlogger" }
+# or, for a local checkout:
+# steamlogger = { path = "../steamlogger" }
+anyhow = "1"
+chrono = "0.4" # only for the custom poll loop below, which timestamps sessions
+```
+
+## Read an existing log
+
+```rust
+use std::path::Path;
+use steamlogger::storage;
+
+fn main() -> anyhow::Result<()> {
+    let log = storage::read_log(Path::new("steamlog.json"))?;
+    for entry in &log.games {
+        println!(
+            "{:<24} {} → {}",
+            entry.name,
+            entry.start,
+            entry.end.as_deref().unwrap_or("in progress")
+        );
+    }
+    Ok(())
+}
+```
+
+Unlike the binary, this propagates the error instead of
+`unwrap_or_default()`-ing it — which is what you want if the file matters.
+
+## Query the Steam API directly
+
+```rust
+use steamlogger::steam::client::SteamClient;
+
+let client = SteamClient::new(std::env::var("STEAMLOGGER_API_KEY")?);
+
+if let Some(game) = client.current_game(76561198000000000)? {
+    println!("playing {} (app {})", game.name, game.app_id);
+    if let Some(server) = &game.gameserver_ip {
+        println!("on server {server}");
+    }
+}
+```
+
+## Query a game server with no Steam involvement
+
+`a2s` is self-contained — useful for a server status page:
+
+```rust
+use steamlogger::a2s::A2sClient;
+
+let mut a2s = A2sClient::new();          // 3-second timeout
+let info = a2s.query("85.190.8.1:27015")?; // "ip:port", bare ip, or hostname
+println!("{} — {}", info.name, info.map);
+```
+
+## Drive the state machine yourself
+
+The tracker is pure: feed it observations and timestamps, and read back
+events. This is the whole poll loop, minus the I/O:
+
+```rust
+use steamlogger::model::GameLog;
+use steamlogger::tracker::{SessionEvent, Tracker};
+
+let mut tracker = Tracker::new(GameLog::default());
+
+match tracker.update(&game, &timestamp) {
+    SessionEvent::Started(i) => notify(&format!("started {}", tracker.log().games[i].name)),
+    SessionEvent::Running(_) => {}
+    _ => unreachable!("update never returns Ended/Idle"),
+}
+
+// later, when the player stops
+if tracker.end_active(&timestamp) == SessionEvent::Ended {
+    notify("session over");
+}
+```
+
+Because `update`/`end_active` take the timestamp as a `&str`, tests and
+replays can use any format — the crate's own tests use `"T0"`, `"T1"`, …
+
+## A custom poll loop
+
+A complete, if minimal, alternative to `main.rs` — with a Discord/desktop
+notification on every transition:
+
+```rust
+use std::time::Duration;
+use steamlogger::{a2s::A2sClient, config, enrich, steam::client::SteamClient,
+                  storage, tracker::{SessionEvent, Tracker}};
+
+fn main() -> anyhow::Result<()> {
+    let cfg = config::load(std::path::Path::new("steamlogger.toml"))?;
+    let client = SteamClient::new(cfg.api_key.clone());
+    let mut a2s = A2sClient::new();
+    let mut tracker = Tracker::new(storage::read_log(&cfg.output_file)?); // note: no unwrap_or_default
+
+    loop {
+        let now = chrono::Local::now().to_rfc3339();
+        match client.current_game(cfg.steam_id) {
+            Ok(Some(game)) => {
+                if let SessionEvent::Started(i) = tracker.update(&game, &now) {
+                    println!("▶ started {}", tracker.log().games[i].name);
+                }
+                let info = enrich::analyze(&client, &mut a2s, cfg.steam_id, &game);
+                if let Some(idx) = tracker.active_index() {
+                    tracker.apply_meta(
+                        idx,
+                        info.map.as_deref(),
+                        info.server.as_deref(),
+                        &info.friends_playing,
+                        &info.friends_in_lobby,
+                    )?;
+                }
+            }
+            Ok(None) => {
+                if tracker.end_active(&now) == SessionEvent::Ended {
+                    println!("■ session ended");
+                }
+            }
+            Err(e) => eprintln!("poll error: {e}"),
+        }
+        storage::write_log(&cfg.output_file, tracker.log())?;
+        std::thread::sleep(Duration::from_secs(cfg.poll_interval_secs.max(5)));
+    }
+}
+```
+
+## Reuse the parsers without any network
+
+Every parsing function is public and pure, which makes them handy for
+fixtures, replays or tests:
+
+```rust
+use steamlogger::steam::api::{parse_friends, parse_player_summaries, summary_to_current_game};
+
+let summaries = parse_player_summaries(include_str!("fixtures/player_summaries.json"))?;
+let friends   = parse_friends(include_str!("fixtures/friends.json"))?;
+let game      = summary_to_current_game(&summaries[0]).expect("in game");
+
+use steamlogger::enrich::{lobby_friends, same_game_friends};
+assert_eq!(same_game_friends(&summaries[1..], &game), vec!["medicmain99"]);
+assert_eq!(lobby_friends(&summaries[1..], &game),     vec!["medicmain99"]);
+```
+
+## Generate a config file
+
+```rust
+std::fs::write("steamlogger.toml", steamlogger::config::example_config())?;
+```
+
+## Things to know before depending on this crate
+
+- **Version 0.1.0, no semver promises yet.** Pin a git revision.
+- **Blocking I/O.** `SteamClient` uses `reqwest::blocking`; calling it from
+  inside an async runtime will block the executor — wrap it in
+  `spawn_blocking`.
+- **`Tracker` is not `Sync`-friendly by design.** It is a plain mutable
+  struct; share it behind your own `Mutex` if needed.
+- **No logging facade.** The library never prints; only the binary does.
+  Errors come back as `anyhow::Error` with context.
+- **`enrich::analyze` cannot fail**, which also means it cannot tell you *why*
+  data is missing. Call `client.friends`, `client.summaries` and
+  `a2s.query` directly if you need the error.
+
+## See also
+
+- [Code reference](../reference/index.mdx) — every public item.
+- [Architecture overview](../architecture/overview.mdx) — how the binary wires
+  these pieces together.

@@ -1,0 +1,156 @@
+---
+id: model
+title: steamlogger::model
+sidebar_label: model
+sidebar_position: 3
+description: API reference for the model module — the LogEntry and GameLog serde types that define the JSON log format.
+---
+
+# `steamlogger::model`
+
+<SourceLink path="src/model.rs" lines={40} />
+
+The smallest module in the crate and the most load-bearing: these two types
+*are* the file format. They have no behaviour beyond serde attributes and one
+constructor.
+
+```rust
+use steamlogger::model::{GameLog, LogEntry};
+```
+
+## Types
+
+### `LogEntry` {/* #logentry */}
+
+```rust
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct LogEntry {
+    pub name: String,
+    pub start: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub end: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub map: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub server: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub friends_playing: Option<Vec<String>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub friends_in_lobby: Option<Vec<String>>,
+}
+```
+
+One recorded game session.
+
+| Field | Type | Serialised when | Produced by |
+| --- | --- | --- | --- |
+| `name` | `String` | always | `CurrentGame::name` (i.e. `gameextrainfo`, or `"App <id>"`) |
+| `start` | `String` | always | `main::now()` at the first sighting |
+| `end` | `Option<String>` | `Some` | `Tracker::close_at` / `end_active` |
+| `map` | `Option<String>` | `Some` | A2S_INFO reply |
+| `server` | `Option<String>` | `Some` | A2S_INFO reply |
+| `friends_playing` | `Option<Vec<String>>` | `Some` | `enrich::same_game_friends` |
+| `friends_in_lobby` | `Option<Vec<String>>` | `Some` | `enrich::lobby_friends` |
+
+Design notes:
+
+- **Timestamps are strings, not `chrono` types.** RFC 3339 text is written
+  exactly as produced and never re-formatted on a round trip, which keeps the
+  file byte-stable and avoids imposing a timezone policy on consumers. The
+  `chrono` dependency is used only in `main`.
+- **`skip_serializing_if` on every optional field** keeps absent data out of
+  the JSON instead of writing `null`. Deserialisation still accepts explicit
+  `null` (serde maps it to `None`).
+- **`PartialEq`** makes the round-trip assertions in the storage and
+  integration tests possible.
+- Field names are the JSON keys verbatim — there is no `rename_all`.
+
+#### `LogEntry::new` {/* #logentrynew */}
+
+```rust
+impl LogEntry {
+    pub fn new(name: String, start: String) -> Self
+}
+```
+
+Creates an **open** entry: `name` and `start` set, all five optional fields
+`None`. This is the only constructor the tracker uses when a session starts.
+
+```rust
+use steamlogger::model::LogEntry;
+
+let e = LogEntry::new("Team Fortress 2".into(), "2026-08-10T14:32:15-03:00".into());
+assert!(e.end.is_none() && e.map.is_none());
+```
+
+### `GameLog` {/* #gamelog */}
+
+```rust
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq)]
+pub struct GameLog {
+    pub games: Vec<LogEntry>,
+}
+```
+
+The root object of the log file: `{"games": [ ... ]}`. Entries are ordered by
+insertion, which is also chronological by `start` as long as the system clock
+moves forward.
+
+`Default` yields `{"games": []}` — the value used for a missing log file and
+for the `unwrap_or_default()` fallback in `main`.
+
+```rust
+use steamlogger::model::{GameLog, LogEntry};
+
+let mut log = GameLog::default();
+log.games.push(LogEntry::new("Portal 2".into(), "2026-08-03T09:00:00-03:00".into()));
+assert_eq!(serde_json::to_string(&log)?,
+    r#"{"games":[{"name":"Portal 2","start":"2026-08-03T09:00:00-03:00"}]}"#);
+```
+
+:::tip Bare arrays are accepted on read
+`GameLog` always *writes* the `{"games": [...]}` envelope, but
+[`storage::read_log`](./storage.mdx#read_log) also accepts a top-level JSON
+array and wraps it for you.
+:::
+
+## Serialisation examples
+
+Minimal entry (session in progress, no enrichment):
+
+```json
+{"name": "Half-Life", "start": "2026-08-01T10:00:00-03:00"}
+```
+
+Full entry:
+
+```json
+{
+  "name": "Team Fortress 2",
+  "start": "2026-08-10T14:32:15-03:00",
+  "end": "2026-08-10T16:47:03-03:00",
+  "map": "cp_dustbowl",
+  "server": "vanilla.steamlogger.dev:27015",
+  "friends_playing": ["Alice", "Bob"],
+  "friends_in_lobby": ["Alice"]
+}
+```
+
+## Tests
+
+`src/model.rs` carries no tests of its own; the types are exercised
+everywhere else:
+
+| Test | Location | Asserts |
+| --- | --- | --- |
+| `entry_to_json_round_trips` | `src/steam/api.rs` | Serialise → deserialise is lossless |
+| `pretty_output_with_skipped_optionals` | `src/storage.rs` | Absent options produce no keys |
+| `round_trip_preserves_entry` | `src/storage.rs` | All seven fields survive a disk round trip |
+| `log_json_shape` | `tests/integration.rs` | Exact key sets for full and minimal entries |
+| `steamlog_sample_fixture_parses` | `tests/integration.rs` | The documented sample file still deserialises |
+
+## See also
+
+- [Log format](../output-format.mdx) — the user-facing schema documentation.
+- [`storage`](./storage.mdx) — reading and writing these types.
+- [`tracker`](./tracker.mdx) — the only place entries are created and mutated.

@@ -1,0 +1,195 @@
+---
+id: config
+title: steamlogger::config
+sidebar_label: config
+sidebar_position: 2
+description: API reference for the config module — Config, RawConfig, load() and example_config().
+---
+
+# `steamlogger::config`
+
+<SourceLink path="src/config.rs" lines={263} />
+
+Loads, merges and validates configuration. Two types and two functions; no
+network, no logging, no globals — the whole module is a pure function of a file
+path plus two environment variables.
+
+```rust
+use steamlogger::config::{self, Config, RawConfig};
+```
+
+For the user-facing view of the same material (keys, defaults, examples), see
+the [configuration guide](../configuration.mdx).
+
+## Types
+
+### `Config` {/* #config */}
+
+```rust
+#[derive(Debug, Clone)]
+pub struct Config {
+    pub api_key: String,
+    pub steam_id: u64,
+    pub poll_interval_secs: u64,
+    pub output_file: PathBuf,
+    pub enrich: bool,
+}
+```
+
+Fully resolved runtime configuration: every optional key has been defaulted and
+every required key is guaranteed present. Produced only by [`load`](#load).
+
+| Field | Type | Notes |
+| --- | --- | --- |
+| `api_key` | `String` | Non-empty by construction (an empty env var falls back to the file; an empty file value is accepted as-is). |
+| `steam_id` | `u64` | SteamID64 of the tracked account. |
+| `poll_interval_secs` | `u64` | **Not clamped here** — `main::run` applies the 5-second floor. |
+| `output_file` | `PathBuf` | Relative paths resolve against the process working directory. |
+| `enrich` | `bool` | `true` enables friends/lobby/server enrichment. |
+
+### `RawConfig` {/* #rawconfig */}
+
+```rust
+#[derive(Debug, Clone, Deserialize)]
+#[serde(default)]
+pub struct RawConfig {
+    pub api_key: Option<String>,
+    pub steam_id: Option<u64>,
+    pub poll_interval_secs: u64,
+    pub output_file: PathBuf,
+    pub enrich: bool,
+}
+```
+
+The on-disk shape, deserialised straight from TOML. `#[serde(default)]` on the
+struct means **any missing key falls back to `Default`**, which is the only
+place defaults are defined:
+
+```rust
+impl Default for RawConfig {
+    fn default() -> Self {
+        Self {
+            api_key: None,
+            steam_id: None,
+            poll_interval_secs: 30,
+            output_file: PathBuf::from("steamlog.json"),
+            enrich: true,
+        }
+    }
+}
+```
+
+The required keys are `Option` here and plain values in `Config`; promoting
+them is exactly what [`load`](#load) does.
+
+:::note Unknown keys are ignored
+There is no `#[serde(deny_unknown_fields)]`, so a misspelled key is silently
+dropped rather than reported. Validate against the
+[key table](../configuration.mdx#keys) if a setting appears to do nothing.
+:::
+
+## Functions
+
+### `load` {/* #load */}
+
+```rust
+pub fn load(path: &Path) -> anyhow::Result<Config>
+```
+
+Reads `path`, applies environment overrides, and validates that both required
+keys resolved.
+
+**Algorithm**
+
+1. `path.is_file()` must hold — otherwise bail with a message pointing at
+   `steamlogger.example.toml`. (A directory path fails here too.)
+2. `std::fs::read_to_string(path)` with context
+   `failed to read config file <path>`.
+3. `toml::from_str::<RawConfig>(&text)` with context
+   `invalid TOML in config file <path>`.
+4. `STEAMLOGGER_API_KEY`: used when set **and non-empty**; otherwise the file
+   value is kept.
+   ```rust
+   let api_key = match std::env::var("STEAMLOGGER_API_KEY") {
+       Ok(key) if !key.is_empty() => Some(key),
+       _ => raw.api_key,
+   };
+   ```
+5. `STEAMLOGGER_STEAM_ID`: used when set **at all**; the value is trimmed and
+   parsed as `u64`, and a parse failure is a hard error
+   (`STEAMLOGGER_STEAM_ID must be a valid u64`). An empty string therefore
+   fails rather than falling back.
+6. Both values must be `Some`, else a `missing required config key …` error.
+7. The remaining three fields are copied from `RawConfig` unchanged.
+
+**Errors**
+
+| Condition | Message |
+| --- | --- |
+| Not a file | ``config file not found: <path> (see steamlogger.example.toml for a commented example)`` |
+| Unreadable | `failed to read config file <path>` |
+| Invalid TOML | `invalid TOML in config file <path>` |
+| Bad `STEAMLOGGER_STEAM_ID` | `STEAMLOGGER_STEAM_ID must be a valid u64` |
+| No API key anywhere | ``missing required config key `api_key` (set it in steamlogger.toml or via STEAMLOGGER_API_KEY)`` |
+| No SteamID anywhere | ``missing required config key `steam_id` (set it in steamlogger.toml or via STEAMLOGGER_STEAM_ID)`` |
+
+**Example**
+
+```rust
+use std::path::Path;
+use steamlogger::config;
+
+let cfg = config::load(Path::new("steamlogger.toml"))?;
+println!("tracking {} every {}s", cfg.steam_id, cfg.poll_interval_secs);
+```
+
+:::warning Environment variables are process-global
+`load` reads the environment directly, so tests that set
+`STEAMLOGGER_API_KEY`/`STEAMLOGGER_STEAM_ID` must serialise with each other.
+The module's own tests use a `static ENV_LOCK: Mutex<()>` for precisely that
+reason — note that with `cargo test`'s default thread-per-test execution, any
+*other* test touching those variables would race.
+:::
+
+### `example_config` {/* #example_config */}
+
+```rust
+pub fn example_config() -> String
+```
+
+Returns the fully commented example configuration as a `String` — the same
+text that ships as `steamlogger.example.toml`. Useful for generating a config
+from the binary or embedding it in documentation:
+
+```rust
+std::fs::write("steamlogger.toml", steamlogger::config::example_config())?;
+```
+
+The unit test `example_config_parses_and_has_required_keys` deserialises the
+returned text into a `RawConfig` and asserts both required keys are present, so
+the example can never drift into being invalid TOML.
+
+## Tests
+
+11 unit tests in `src/config.rs`, plus 2 integration tests.
+
+| Test | Asserts |
+| --- | --- |
+| `defaults_are_sane` | `RawConfig::default()` is 30 s / `steamlog.json` / `enrich = true` / no credentials |
+| `minimal_config_loads_with_defaults` | Only the two required keys are needed |
+| `explicit_values_override_defaults` | All five keys round-trip |
+| `missing_api_key_is_error` | Error mentions `api_key` |
+| `missing_steam_id_is_error` | Error mentions `steam_id` |
+| `nonexistent_file_is_error` | Error points at `steamlogger.example.toml` |
+| `invalid_toml_is_error` | Malformed TOML fails |
+| `api_key_env_override` | Env beats file |
+| `steam_id_env_override` | Env beats file |
+| `env_can_supply_missing_keys` | A file with no credentials still loads |
+| `example_config_parses_and_has_required_keys` | The embedded example stays valid |
+| `config_load_roundtrip` *(integration)* | Defaults observed through the public API |
+| `config_missing_required_key_errors` *(integration)* | Same error surface from outside the crate |
+
+## See also
+
+- [Configuration guide](../configuration.mdx) — the same rules, task-oriented.
+- [`main`](./main.mdx#run) — where `poll_interval_secs` gets its 5-second floor.

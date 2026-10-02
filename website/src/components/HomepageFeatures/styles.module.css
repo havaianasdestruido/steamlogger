@@ -1,0 +1,39 @@
+.features {
+  padding: 3.5rem 0 1rem;
+}
+
+.features .row {
+  row-gap: 1.5rem;
+}
+
+.card {
+  display: block;
+  height: 100%;
+  padding: 1.4rem 1.5rem;
+  border: 1px solid var(--sl-border);
+  border-radius: 12px;
+  background: var(--sl-surface);
+  color: inherit;
+  transition: transform 150ms ease, border-color 150ms ease,
+    box-shadow 150ms ease;
+}
+
+.card:hover {
+  text-decoration: none;
+  color: inherit;
+  transform: translateY(-3px);
+  border-color: var(--ifm-color-primary);
+  box-shadow: 0 10px 24px rgba(0, 0, 0, 0.12);
+}
+
+.cardTitle {
+  font-size: 1.1rem;
+  margin-bottom: 0.6rem;
+  color: var(--ifm-color-primary);
+}
+
+.cardBody {
+  margin: 0;
+  font-size: 0.95rem;
+  line-height: 1.6;
+}

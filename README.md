@@ -33,6 +33,26 @@ Output format (matches `steamlog.json`, enrichment fields are optional):
 }
 ```
 
+## Documentation
+
+Full documentation lives at
+**[havaianasdestruido.github.io/steamlogger](https://havaianasdestruido.github.io/steamlogger/)**
+(source in [`website/`](website/)):
+
+- [Installation](https://havaianasdestruido.github.io/steamlogger/docs/getting-started/installation)
+  and [Quickstart](https://havaianasdestruido.github.io/steamlogger/docs/getting-started/quickstart)
+- [Configuration reference](https://havaianasdestruido.github.io/steamlogger/docs/configuration)
+  and [log format](https://havaianasdestruido.github.io/steamlogger/docs/output-format)
+- [Architecture](https://havaianasdestruido.github.io/steamlogger/docs/architecture/overview):
+  the poll loop, session state machine, enrichment pipeline and failure model
+- [Code reference](https://havaianasdestruido.github.io/steamlogger/docs/reference/):
+  every public item of every module
+- [Troubleshooting](https://havaianasdestruido.github.io/steamlogger/docs/troubleshooting)
+
+```bash
+cd website && npm install && npm start
+```
+
 ## How it works
 
 SteamLogger polls the [Steam Web API](https://steamcommunity.com/dev) every few
