@@ -1,15 +1,1 @@
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" width="64" height="64" role="img" aria-label="SteamLogger logo">
-  <defs>
-    <linearGradient id="slg" x1="0" y1="0" x2="0" y2="1">
-      <stop offset="0%" stop-color="#7fcdf8"/>
-      <stop offset="100%" stop-color="#1668a5"/>
-    </linearGradient>
-  </defs>
-  <rect x="0" y="0" width="64" height="64" rx="14" fill="url(#slg)"/>
-  <g fill="#0f1b26">
-    <rect x="13" y="18.5" width="36" height="6" rx="3"/>
-    <rect x="13" y="29" width="27" height="6" rx="3"/>
-    <rect x="13" y="39.5" width="18" height="6" rx="3"/>
-  </g>
-  <circle cx="45.5" cy="42.5" r="6" fill="#ffffff"/>
-</svg>
+<svg aria-label="SteamLogger logo" viewBox="0 0 64 64"><defs><linearGradient id="a" x1="0" x2="0" y1="0" y2="1"><stop offset="0%" stop-color="#7fcdf8"/><stop offset="100%" stop-color="#1668a5"/></linearGradient></defs><rect width="64" height="64" fill="url(#a)" rx="14"/><g fill="#0f1b26"><rect width="36" height="6" x="13" y="18.5" rx="3"/><rect width="27" height="6" x="13" y="29" rx="3"/><rect width="18" height="6" x="13" y="39.5" rx="3"/></g><circle cx="45.5" cy="42.5" r="6" fill="#fff"/></svg>
