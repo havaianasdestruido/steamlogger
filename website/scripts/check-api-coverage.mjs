@@ -63,25 +63,62 @@ function stripTestModules(source) {
 }
 
 const ITEM_PATTERNS = [
-  {kind: 'struct', re: /^\s*pub struct\s+([A-Za-z_][A-Za-z0-9_]*)/gm},
-  {kind: 'enum', re: /^\s*pub enum\s+([A-Za-z_][A-Za-z0-9_]*)/gm},
-  {kind: 'fn', re: /^\s*pub(?:\s*\([^)]*\))?\s+fn\s+([A-Za-z_][A-Za-z0-9_]*)/gm},
-  {kind: 'mod', re: /^\s*pub mod\s+([A-Za-z_][A-Za-z0-9_]*)/gm},
+  {kind: 'struct', re: /^\s*pub struct\s+([A-Za-z_][A-Za-z0-9_]*)/},
+  {kind: 'enum', re: /^\s*pub enum\s+([A-Za-z_][A-Za-z0-9_]*)/},
+  {kind: 'fn', re: /^\s*pub(?:\s*\([^)]*\))?\s+fn\s+([A-Za-z_][A-Za-z0-9_]*)/},
+  {kind: 'mod', re: /^\s*pub mod\s+([A-Za-z_][A-Za-z0-9_]*)/},
 ];
 
-function collectPublicItems() {
+// `impl Type {` or `impl<T> Trait for Type {`
+const IMPL_RE =
+  /^\s*impl(?:\s*<[^>]*>)?\s+(?:[\w:]+(?:<[^>]*>)?\s+for\s+)?([A-Za-z_][A-Za-z0-9_]*)/;
+
+/**
+ * Walk a file line by line, tracking brace depth so every `pub fn` inside an
+ * `impl Type` block is recorded as `Type::fn` rather than a bare name. A bare
+ * `new` appearing anywhere in the docs must not count as coverage for
+ * `Tracker::new`.
+ */
+function collectItemsFromFile(file) {
+  const source = stripTestModules(readFileSync(file, 'utf8'));
+  const relPath = relative(repoRoot, file);
   const items = [];
-  for (const file of listFiles(srcDir, '.rs')) {
-    const source = stripTestModules(readFileSync(file, 'utf8'));
+  const implStack = []; // {owner, depth}
+  let depth = 0;
+
+  for (const line of source.split('\n')) {
+    const code = line.replace(/\/\/.*$/, '');
+
     for (const {kind, re} of ITEM_PATTERNS) {
-      re.lastIndex = 0;
-      let m;
-      while ((m = re.exec(source)) !== null) {
-        items.push({name: m[1], kind, file: relative(repoRoot, file)});
+      const m = re.exec(code);
+      if (m) {
+        const owner = kind === 'fn' ? implStack.at(-1)?.owner : undefined;
+        items.push({name: m[1], kind, owner, file: relPath});
+        break;
       }
+    }
+
+    const implMatch = IMPL_RE.exec(code);
+    const opens = (code.match(/\{/g) ?? []).length;
+    const closes = (code.match(/\}/g) ?? []).length;
+    if (implMatch && opens > 0) {
+      implStack.push({owner: implMatch[1], depth});
+    }
+    depth += opens - closes;
+    while (implStack.length > 0 && depth <= implStack.at(-1).depth) {
+      implStack.pop();
     }
   }
   return items;
+}
+
+function collectPublicItems() {
+  return listFiles(srcDir, '.rs').flatMap(collectItemsFromFile);
+}
+
+/** What the docs must mention: `Type::method` for methods, the name otherwise. */
+function expectedMention(item) {
+  return item.owner ? `${item.owner}::${item.name}` : item.name;
 }
 
 function readReferenceDocs() {
@@ -100,16 +137,20 @@ function main() {
   const items = collectPublicItems();
   const docs = readReferenceDocs();
 
-  // `pub mod` names are module declarations; they are covered by the crate
-  // map table rather than by an item heading.
-  const missing = items.filter(({name}) => {
-    const wordBoundary = new RegExp(`(^|[^A-Za-z0-9_])${name}([^A-Za-z0-9_]|$)`);
-    return !wordBoundary.test(docs);
+  const missing = items.filter((item) => {
+    const mention = expectedMention(item);
+    const pattern = new RegExp(
+      `(^|[^A-Za-z0-9_:])${mention.replace('::', '::')}([^A-Za-z0-9_]|$)`,
+    );
+    return !pattern.test(docs);
   });
 
-  const unique = new Set(items.map((i) => `${i.file}:${i.name}`));
+  const count = (kind) => items.filter((i) => i.kind === kind).length;
+  const methods = items.filter((i) => i.owner).length;
   console.log(
-    `${GREEN}✔${RESET} ${unique.size} public items found in src/ ${DIM}(${items.filter((i) => i.kind === 'struct').length} structs, ${items.filter((i) => i.kind === 'enum').length} enums, ${items.filter((i) => i.kind === 'fn').length} fns, ${items.filter((i) => i.kind === 'mod').length} mods)${RESET}`,
+    `${GREEN}✔${RESET} ${items.length} public items found in src/ ${DIM}(${count(
+      'struct',
+    )} structs, ${count('enum')} enums, ${count('fn')} fns of which ${methods} are inherent/trait methods, ${count('mod')} mods)${RESET}`,
   );
 
   if (missing.length > 0) {
@@ -117,9 +158,14 @@ function main() {
       `\n${RED}✘${RESET} ${missing.length} public item(s) are not documented in docs/reference/:`,
     );
     for (const item of missing) {
-      console.error(`   - ${item.file}:  ${item.kind} ${item.name}`);
+      console.error(
+        `   - ${item.file}:  ${item.kind} ${expectedMention(item)}`,
+      );
     }
-    console.error('\nAdd them to the matching page under website/docs/reference/.');
+    console.error(
+      '\nAdd them to the matching page under website/docs/reference/ ' +
+        '(methods must be referenced as `Type::method`).',
+    );
     process.exit(1);
   }
 

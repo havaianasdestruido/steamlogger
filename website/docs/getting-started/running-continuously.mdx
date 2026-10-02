@@ -38,6 +38,8 @@ Wants=network-online.target
 Type=simple
 WorkingDirectory=%h/.local/share/steamlogger
 ExecStart=%h/.cargo/bin/steamlogger %h/.config/steamlogger/config.toml
+# api_key comes from the environment here; steam_id (and any optional keys)
+# must be set in config.toml — or add Environment=STEAMLOGGER_STEAM_ID=...
 Environment=STEAMLOGGER_API_KEY=xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx
 Restart=on-failure
 RestartSec=10

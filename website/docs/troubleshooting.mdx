@@ -13,25 +13,43 @@ can grep for it.
 
 ## It will not start
 
-### `failed to load config from <path>: config file not found`
+### `config file not found`
 
-SteamLogger looks for `steamlogger.toml` **in the current working directory**
-unless you pass a path. Under a service manager the working directory is
-rarely what you expect.
+The full output — `main` prints its own prefix, then the whole `anyhow` chain
+from `config::load`, then a hint on a second line:
+
+```text
+failed to load config from steamlogger.toml: config file not found: steamlogger.toml (see steamlogger.example.toml for a commented example)
+copy steamlogger.example.toml to steamlogger.toml and fill it in
+```
+
+The path appears twice (once from each layer) — that is expected, not a double
+lookup. SteamLogger looks for `steamlogger.toml` **in the current working
+directory** unless you pass a path, and under a service manager the working
+directory is rarely what you expect.
 
 ```bash
 cp steamlogger.example.toml steamlogger.toml   # create it
 steamlogger /absolute/path/to/config.toml      # or be explicit
 ```
 
-### `missing required config key 'api_key'` / `'steam_id'`
+### `missing required config key`
+
+```text
+failed to load config from steamlogger.toml: missing required config key `api_key` (set it in steamlogger.toml or via STEAMLOGGER_API_KEY)
+failed to load config from steamlogger.toml: missing required config key `steam_id` (set it in steamlogger.toml or via STEAMLOGGER_STEAM_ID)
+```
 
 Neither the file nor the environment supplied the value. Note that
 `STEAMLOGGER_API_KEY=""` counts as *unset* (the file value is used), while
 `STEAMLOGGER_STEAM_ID=""` is a hard error — see
 [precedence](./configuration.mdx#precedence).
 
-### `invalid TOML in config file <path>`
+### `invalid TOML in config file`
+
+```text
+failed to load config from steamlogger.toml: invalid TOML in config file steamlogger.toml: TOML parse error at line 2, column 12
+```
 
 Usually a quoting problem. `steam_id` is a **number, not a string**:
 
@@ -41,6 +59,10 @@ Usually a quoting problem. `steam_id` is a **number, not a string**:
 ```
 
 ### `STEAMLOGGER_STEAM_ID must be a valid u64`
+
+```text
+failed to load config from steamlogger.toml: STEAMLOGGER_STEAM_ID must be a valid u64
+```
 
 The variable is set to something non-numeric — a vanity name, a `STEAM_0:…`
 id, or an empty string. Convert it to the 17-digit SteamID64 first.

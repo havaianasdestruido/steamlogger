@@ -39,13 +39,38 @@ jq '.games[] | select(.end == null)' steamlog.json
 
 ## Playtime
 
-Durations are computed from the two RFC 3339 strings. `fromdateiso8601`
-requires a `Z` suffix, so offsets are normalised first with a small helper:
+Durations are computed from the two RFC 3339 strings — but **`fromdateiso8601`
+alone is not enough**. It only understands a `Z` suffix, and SteamLogger always
+writes a numeric offset (`2026-08-10T14:32:15-03:00`), so a bare
+`fromdateiso8601` fails with *does not match format "%Y-%m-%dT%H:%M:%SZ"*.
+
+Every recipe below therefore starts with the same offset-aware `secs` helper,
+which converts any RFC 3339 timestamp — `Z`, `+00:00` or `-03:00`, with or
+without fractional seconds — to a UTC epoch:
+
+```jq
+def secs:
+  capture("^(?<t>.{19})(?:\\.\\d+)?(?<s>[Z+-])(?:(?<h>\\d{2}):(?<m>\\d{2}))?$") as $d
+  | ($d.t + "Z" | fromdateiso8601)
+    - (if $d.s == "Z" then 0
+       else (($d.h|tonumber) * 3600 + ($d.m|tonumber) * 60) * (if $d.s == "+" then 1 else -1 end)
+       end);
+```
+
+:::tip Define it once
+Append that definition to `~/.jq` and jq loads it automatically for every
+invocation — then you can drop the `def secs:` block from the recipes below.
+:::
 
 ```bash
 # Total hours per game, descending
 jq -r '
-  def secs: sub("\\.[0-9]+";"") | fromdateiso8601;
+  def secs:
+    capture("^(?<t>.{19})(?:\\.\\d+)?(?<s>[Z+-])(?:(?<h>\\d{2}):(?<m>\\d{2}))?$") as $d
+    | ($d.t + "Z" | fromdateiso8601)
+      - (if $d.s == "Z" then 0
+         else (($d.h|tonumber) * 3600 + ($d.m|tonumber) * 60) * (if $d.s == "+" then 1 else -1 end)
+         end);
   [ .games[]
     | select(.end != null)
     | {name, d: ((.end|secs) - (.start|secs))} ]
@@ -65,7 +90,12 @@ jq -r '
 ```bash
 # Longest single session
 jq -r '
-  def secs: fromdateiso8601;
+  def secs:
+    capture("^(?<t>.{19})(?:\\.\\d+)?(?<s>[Z+-])(?:(?<h>\\d{2}):(?<m>\\d{2}))?$") as $d
+    | ($d.t + "Z" | fromdateiso8601)
+      - (if $d.s == "Z" then 0
+         else (($d.h|tonumber) * 3600 + ($d.m|tonumber) * 60) * (if $d.s == "+" then 1 else -1 end)
+         end);
   [ .games[] | select(.end != null)
     | {name, start, mins: (((.end|secs) - (.start|secs)) / 60 | round)} ]
   | max_by(.mins)
@@ -76,7 +106,12 @@ jq -r '
 ```bash
 # Hours played per calendar day (local date taken from the timestamp prefix)
 jq -r '
-  def secs: fromdateiso8601;
+  def secs:
+    capture("^(?<t>.{19})(?:\\.\\d+)?(?<s>[Z+-])(?:(?<h>\\d{2}):(?<m>\\d{2}))?$") as $d
+    | ($d.t + "Z" | fromdateiso8601)
+      - (if $d.s == "Z" then 0
+         else (($d.h|tonumber) * 3600 + ($d.m|tonumber) * 60) * (if $d.s == "+" then 1 else -1 end)
+         end);
   [ .games[] | select(.end != null)
     | {day: .start[0:10], d: ((.end|secs) - (.start|secs))} ]
   | group_by(.day)
