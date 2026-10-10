@@ -24,15 +24,23 @@ pub fn read_log(path: &Path) -> anyhow::Result<GameLog> {
 /// Atomically write the log: write a temp file next to `path`, then rename it
 /// over the target so a crash never leaves a half-written JSON file.
 pub fn write_log(path: &Path, log: &GameLog) -> anyhow::Result<()> {
-    let mut json = serde_json::to_string_pretty(log)?;
-    json.push('\n');
     if let Some(parent) = path.parent() {
         if !parent.as_os_str().is_empty() {
             std::fs::create_dir_all(parent)?;
         }
     }
     let tmp = temp_path(path);
-    std::fs::write(&tmp, json)?;
+
+    // ⚡ Bolt: Stream JSON directly to disk via BufWriter to avoid allocating
+    // a large String containing the entire log file on every poll interval.
+    let mut file = std::io::BufWriter::new(std::fs::File::create(&tmp)?);
+    serde_json::to_writer_pretty(&mut file, log)?;
+
+    use std::io::Write;
+    file.write_all(b"\n")?;
+    file.flush()?;
+    drop(file); // Ensure file is closed before renaming
+
     std::fs::rename(&tmp, path)?;
     Ok(())
 }
