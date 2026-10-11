@@ -55,32 +55,46 @@ fn run(config: &config::Config) -> ExitCode {
             break;
         }
 
+        let mut dirty = false;
+
         match client.current_game(config.steam_id) {
             Ok(Some(game)) => {
-                let _event = tracker.update(&game, &now());
+                let event = tracker.update(&game, &now());
+                match event {
+                    steamlogger::tracker::SessionEvent::Running(_) => {}
+                    _ => dirty = true,
+                }
+
                 if config.enrich {
                     let info = enrich::analyze(&client, &mut a2s, config.steam_id, &game);
                     if let Some(idx) = tracker.active_index() {
-                        if let Err(e) = tracker.apply_meta(
+                        match tracker.apply_meta(
                             idx,
                             info.map.as_deref(),
                             info.server.as_deref(),
                             &info.friends_playing,
                             &info.friends_in_lobby,
                         ) {
-                            eprintln!("enrichment failed: {e}");
+                            Ok(true) => dirty = true,
+                            Ok(false) => {}
+                            Err(e) => eprintln!("enrichment failed: {e}"),
                         }
                     }
                 }
             }
             Ok(None) => {
-                let _event = tracker.end_active(&now());
+                let event = tracker.end_active(&now());
+                if event != steamlogger::tracker::SessionEvent::Idle {
+                    dirty = true;
+                }
             }
             Err(e) => eprintln!("poll error: {e}"),
         }
 
-        if let Err(e) = storage::write_log(&config.output_file, tracker.log()) {
-            eprintln!("failed to save log: {e}");
+        if dirty {
+            if let Err(e) = storage::write_log(&config.output_file, tracker.log()) {
+                eprintln!("failed to save log: {e}");
+            }
         }
 
         let _ = rx.recv_timeout(interval);
