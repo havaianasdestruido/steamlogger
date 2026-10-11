@@ -86,6 +86,7 @@ impl Tracker {
 
     /// Attach enrichment data to entry `index`. Empty friend lists are stored
     /// as `None` so the JSON stays minimal.
+    /// Returns `true` if any fields were changed.
     pub fn apply_meta(
         &mut self,
         index: usize,
@@ -93,17 +94,38 @@ impl Tracker {
         server: Option<&str>,
         friends_playing: &[String],
         friends_in_lobby: &[String],
-    ) -> anyhow::Result<()> {
+    ) -> anyhow::Result<bool> {
         let entry = self
             .log
             .games
             .get_mut(index)
             .ok_or_else(|| anyhow::anyhow!("entry index {} out of bounds", index))?;
-        entry.map = map.map(str::to_string);
-        entry.server = server.map(str::to_string);
-        entry.friends_playing = (!friends_playing.is_empty()).then(|| friends_playing.to_vec());
-        entry.friends_in_lobby = (!friends_in_lobby.is_empty()).then(|| friends_in_lobby.to_vec());
-        Ok(())
+
+        let mut changed = false;
+
+        if entry.map.as_deref() != map {
+            entry.map = map.map(str::to_string);
+            changed = true;
+        }
+
+        if entry.server.as_deref() != server {
+            entry.server = server.map(str::to_string);
+            changed = true;
+        }
+
+        let friends_playing_opt = (!friends_playing.is_empty()).then_some(friends_playing);
+        if entry.friends_playing.as_deref() != friends_playing_opt {
+            entry.friends_playing = friends_playing_opt.map(|f| f.to_vec());
+            changed = true;
+        }
+
+        let friends_in_lobby_opt = (!friends_in_lobby.is_empty()).then_some(friends_in_lobby);
+        if entry.friends_in_lobby.as_deref() != friends_in_lobby_opt {
+            entry.friends_in_lobby = friends_in_lobby_opt.map(|f| f.to_vec());
+            changed = true;
+        }
+
+        Ok(changed)
     }
 
     fn close_at(&mut self, index: usize, now: &str) {
