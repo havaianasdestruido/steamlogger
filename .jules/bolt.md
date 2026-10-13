@@ -8,3 +8,6 @@
 ## 2024-05-18 - Memory-efficient JSON Serialization
 **Learning:** For a JSON log file that grows indefinitely over time, allocating the entire serialized output in a single string (e.g., `serde_json::to_string_pretty`) causes an O(N) memory spike on every write.
 **Action:** Always stream serialization directly to disk using `serde_json::to_writer` (or `to_writer_pretty`) with a `BufWriter` to maintain O(1) memory usage regardless of file size.
+## 2024-05-19 - URL Generation Performance
+**Learning:** `player_summaries_url` originally used `collect::<Vec<_>>().join(",")` to format a comma-separated list of IDs. This requires O(N) heap allocations for individual strings plus the Vec buffer, which is very inefficient.
+**Action:** Use `std::fmt::Write` to manually push characters and format directly into a `String::with_capacity` buffer for constructing complex API URLs without intermediate allocations.

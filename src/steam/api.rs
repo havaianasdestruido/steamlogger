@@ -124,10 +124,22 @@ pub struct RawFriend {
 
 /// `ISteamUser/GetPlayerSummaries/v2` URL. Accepts up to 100 comma-separated ids.
 pub fn player_summaries_url(key: &str, ids: &[u64]) -> String {
-    let ids = ids.iter().map(u64::to_string).collect::<Vec<_>>().join(",");
-    format!(
-        "https://api.steampowered.com/ISteamUser/GetPlayerSummaries/v2/?key={key}&steamids={ids}"
-    )
+    use std::fmt::Write;
+    // ⚡ Bolt optimization: Pre-allocate a single string for the entire URL
+    // instead of creating intermediate allocations for each ID string and the join Vec.
+    // 80 chars for base URL + key length + ~20 chars per u64 ID
+    let mut url = String::with_capacity(80 + key.len() + ids.len() * 20);
+    let _ = write!(
+        url,
+        "https://api.steampowered.com/ISteamUser/GetPlayerSummaries/v2/?key={key}&steamids="
+    );
+    for (i, id) in ids.iter().enumerate() {
+        if i > 0 {
+            url.push(',');
+        }
+        let _ = write!(url, "{id}");
+    }
+    url
 }
 
 /// `ISteamUser/GetFriendList/v1` URL.
