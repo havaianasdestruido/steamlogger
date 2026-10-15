@@ -11,14 +11,42 @@ pub fn read_log(path: &Path) -> anyhow::Result<GameLog> {
     if !path.exists() {
         return Ok(GameLog::default());
     }
-    let text = std::fs::read_to_string(path)?;
-    let trimmed = text.trim_start();
-    if trimmed.starts_with('[') {
-        let games: Vec<LogEntry> = serde_json::from_str(&text)
+    let file = std::fs::File::open(path)?;
+    let mut reader = std::io::BufReader::new(file);
+
+    use std::io::BufRead;
+    let is_array = {
+        let mut is_arr = false;
+        loop {
+            let buf = reader.fill_buf()?;
+            if buf.is_empty() {
+                break;
+            }
+            let mut consumed = 0;
+            let mut found = false;
+            for &b in buf {
+                if !b.is_ascii_whitespace() {
+                    is_arr = b == b'[';
+                    found = true;
+                    break;
+                }
+                consumed += 1;
+            }
+            reader.consume(consumed);
+            if found {
+                break;
+            }
+        }
+        is_arr
+    };
+
+    if is_array {
+        let games: Vec<LogEntry> = serde_json::from_reader(reader)
             .with_context(|| format!("malformed JSON log array in {}", path.display()))?;
         return Ok(GameLog { games });
     }
-    serde_json::from_str(&text).with_context(|| format!("malformed JSON log in {}", path.display()))
+    serde_json::from_reader(reader)
+        .with_context(|| format!("malformed JSON log in {}", path.display()))
 }
 
 /// Atomically write the log: write a temp file next to `path`, then rename it
