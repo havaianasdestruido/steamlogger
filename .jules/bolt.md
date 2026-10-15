@@ -11,3 +11,6 @@
 ## 2024-05-19 - URL Generation Performance
 **Learning:** `player_summaries_url` originally used `collect::<Vec<_>>().join(",")` to format a comma-separated list of IDs. This requires O(N) heap allocations for individual strings plus the Vec buffer, which is very inefficient.
 **Action:** Use `std::fmt::Write` to manually push characters and format directly into a `String::with_capacity` buffer for constructing complex API URLs without intermediate allocations.
+## 2024-05-20 - Memory-efficient JSON Deserialization
+**Learning:** For a JSON log file that grows indefinitely over time, reading the entire file contents into a single string (e.g., `std::fs::read_to_string`) causes an O(N) memory spike upon startup.
+**Action:** Always stream deserialization directly from disk using `serde_json::from_reader` with a `BufReader` to maintain O(1) memory usage regardless of file size, complementing the streaming write optimization.
