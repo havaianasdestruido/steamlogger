@@ -103,19 +103,21 @@ pub struct RawPlayerSummary {
 }
 
 #[derive(Debug, Deserialize)]
-pub struct FriendListResponse {
-    pub friendslist: FriendListBody,
+pub struct FriendListResponse<'a> {
+    #[serde(borrow)]
+    pub friendslist: FriendListBody<'a>,
 }
 
 #[derive(Debug, Deserialize)]
-pub struct FriendListBody {
-    pub friends: Vec<RawFriend>,
+pub struct FriendListBody<'a> {
+    #[serde(borrow)]
+    pub friends: Vec<RawFriend<'a>>,
 }
 
 #[derive(Debug, Clone, Deserialize)]
-pub struct RawFriend {
-    pub steamid: String,
-    pub relationship: String,
+pub struct RawFriend<'a> {
+    pub steamid: &'a str,
+    pub relationship: &'a str,
 }
 
 // ---------------------------------------------------------------------------
@@ -166,7 +168,12 @@ pub fn parse_player_summaries(json: &str) -> anyhow::Result<Vec<PlayerSummary>> 
 
 /// Parse a GetFriendList response body into friends (relationship == "friend").
 pub fn parse_friends(json: &str) -> anyhow::Result<Vec<Friend>> {
-    let resp: FriendListResponse = serde_json::from_str(json)?;
+    // ⚡ Bolt optimization: Use zero-copy deserialization for the friend list API response.
+    // By borrowing `&str` from the raw JSON instead of allocating `String`s for `steamid`
+    // and `relationship`, we eliminate 2 * N heap allocations per poll tick (where N is
+    // the number of friends). The `steamid` is parsed directly into a `u64` and the strings
+    // are discarded, making this a pure zero-copy operation.
+    let resp: FriendListResponse<'_> = serde_json::from_str(json)?;
     Ok(resp
         .friendslist
         .friends
