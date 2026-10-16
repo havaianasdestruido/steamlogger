@@ -14,3 +14,6 @@
 ## 2024-05-20 - Memory-efficient JSON Deserialization
 **Learning:** For a JSON log file that grows indefinitely over time, reading the entire file contents into a single string (e.g., `std::fs::read_to_string`) causes an O(N) memory spike upon startup.
 **Action:** Always stream deserialization directly from disk using `serde_json::from_reader` with a `BufReader` to maintain O(1) memory usage regardless of file size, complementing the streaming write optimization.
+## 2024-10-16 - Zero-copy JSON Deserialization
+**Learning:** `FriendListResponse` in `src/steam/api.rs` used `String` fields for `steamid` and `relationship` during intermediate JSON parsing, leading to `2 * N` heap allocations per poll tick where `N` is the number of friends, only to immediately discard the `relationship` string and parse the `steamid` to an integer.
+**Action:** When extracting non-string values or discarding strings from a JSON response, use `&'a str` with `#[serde(borrow)]` on the intermediate structs. This allows `serde_json` to borrow slices directly from the input JSON string without allocating intermediate heap buffers, turning parsing into a completely zero-copy operation.
