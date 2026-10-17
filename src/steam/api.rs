@@ -20,7 +20,7 @@ pub struct CurrentGame {
     pub gameserver_ip: Option<String>,
 }
 
-impl RawPlayerSummary {
+impl RawPlayerSummary<'_> {
     /// Maps a raw row to a `PlayerSummary`, skipping rows with unparseable ids.
     fn into_summary(self) -> Option<PlayerSummary> {
         let steam_id = self.steamid.parse().ok()?;
@@ -30,9 +30,9 @@ impl RawPlayerSummary {
             persona_name: self.personaname,
             game_id,
             game_extra_info: self.gameextrainfo,
-            lobby_steam_id: self.lobbysteamid,
+            lobby_steam_id: self.lobbysteamid.map(|c| c.into_owned()),
             gamedir: self.gamedir,
-            gameserver_ip: self.gameserverip,
+            gameserver_ip: self.gameserverip.map(|c| c.into_owned()),
         })
     }
 }
@@ -77,27 +77,30 @@ pub fn summary_to_current_game(summary: &PlayerSummary) -> Option<CurrentGame> {
 // ---------------------------------------------------------------------------
 
 #[derive(Debug, Deserialize)]
-pub struct PlayerSummariesResponse {
-    pub response: PlayerSummariesBody,
+pub struct PlayerSummariesResponse<'a> {
+    #[serde(borrow)]
+    pub response: PlayerSummariesBody<'a>,
 }
 
 #[derive(Debug, Deserialize)]
-pub struct PlayerSummariesBody {
-    pub players: Vec<RawPlayerSummary>,
+pub struct PlayerSummariesBody<'a> {
+    #[serde(borrow)]
+    pub players: Vec<RawPlayerSummary<'a>>,
 }
 
 #[derive(Debug, Clone, Deserialize)]
-pub struct RawPlayerSummary {
-    pub steamid: String,
+pub struct RawPlayerSummary<'a> {
+    #[serde(borrow)]
+    pub steamid: std::borrow::Cow<'a, str>,
     pub personaname: String,
-    #[serde(default)]
-    pub gameid: Option<String>,
+    #[serde(default, borrow)]
+    pub gameid: Option<std::borrow::Cow<'a, str>>,
     #[serde(default)]
     pub gameextrainfo: Option<String>,
-    #[serde(default)]
-    pub lobbysteamid: Option<String>,
-    #[serde(default)]
-    pub gameserverip: Option<String>,
+    #[serde(default, borrow)]
+    pub lobbysteamid: Option<std::borrow::Cow<'a, str>>,
+    #[serde(default, borrow)]
+    pub gameserverip: Option<std::borrow::Cow<'a, str>>,
     #[serde(default)]
     pub gamedir: Option<String>,
 }
@@ -157,7 +160,11 @@ pub fn friend_list_url(key: &str, steam_id: u64) -> String {
 
 /// Parse a GetPlayerSummaries response body into player summaries.
 pub fn parse_player_summaries(json: &str) -> anyhow::Result<Vec<PlayerSummary>> {
-    let resp: PlayerSummariesResponse = serde_json::from_str(json)?;
+    // ⚡ Bolt optimization: Use zero-copy deserialization where possible for the player summaries API response.
+    // By borrowing `&str` from the raw JSON (using `Cow`) for fields like `steamid`, `gameid`, `lobbysteamid`,
+    // and `gameserverip` that only get parsed or cloned later, we reduce intermediate heap allocations during
+    // deserialization on every poll tick.
+    let resp: PlayerSummariesResponse<'_> = serde_json::from_str(json)?;
     Ok(resp
         .response
         .players
