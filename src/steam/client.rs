@@ -4,7 +4,7 @@ use anyhow::Context;
 
 use crate::steam::api::{
     friend_list_url, parse_friends, parse_player_summaries, player_summaries_url,
-    summary_to_current_game, CurrentGame, Friend, PlayerSummary,
+    summary_to_current_game, CurrentGame, PlayerSummary,
 };
 
 /// Blocking HTTP client wrapping the Steam Web API. One instance is enough
@@ -39,7 +39,7 @@ impl SteamClient {
     }
 
     /// Friend list (relationship == "friend").
-    pub fn friends(&self, steam_id: u64) -> anyhow::Result<Vec<Friend>> {
+    pub fn friends(&self, steam_id: u64) -> anyhow::Result<Vec<u64>> {
         let url = friend_list_url(&self.key, steam_id);
         let body = self.get_text(url, "friend list")?;
         parse_friends(&body)
@@ -49,7 +49,9 @@ impl SteamClient {
     /// and merges results.
     pub fn summaries(&self, ids: &[u64]) -> anyhow::Result<Vec<PlayerSummary>> {
         let mut out = Vec::with_capacity(ids.len());
-        for chunk in chunks(ids) {
+        // ⚡ Bolt optimization: Use standard `ids.chunks(100)` iterator instead of
+        // collecting into an intermediate `Vec<&[u64]>` via custom chunking logic.
+        for chunk in ids.chunks(100) {
             let url = player_summaries_url(&self.key, chunk);
             let body = self.get_text(url, "player summaries")?;
             out.extend(parse_player_summaries(&body)?);
@@ -69,11 +71,6 @@ impl SteamClient {
     }
 }
 
-/// Splits `ids` into chunks of at most 100, the Steam API per-request limit.
-fn chunks(ids: &[u64]) -> Vec<&[u64]> {
-    ids.chunks(100).collect()
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -81,45 +78,5 @@ mod tests {
     #[test]
     fn client_constructs() {
         let _c = SteamClient::new("dummy-key".into());
-    }
-
-    #[test]
-    fn chunks_empty() {
-        assert!(chunks(&[]).is_empty());
-    }
-
-    #[test]
-    fn chunks_under_limit() {
-        let ids = [1u64, 2, 3];
-        let got = chunks(&ids);
-        assert_eq!(got.len(), 1);
-        assert_eq!(got[0], &ids[..]);
-    }
-
-    #[test]
-    fn chunks_exact_limit() {
-        let ids: Vec<u64> = (0..100).collect();
-        let got = chunks(&ids);
-        assert_eq!(got.len(), 1);
-        assert_eq!(got[0].len(), 100);
-    }
-
-    #[test]
-    fn chunks_over_limit() {
-        let ids: Vec<u64> = (0..101).collect();
-        let got = chunks(&ids);
-        assert_eq!(got.len(), 2);
-        assert_eq!(got[0].len(), 100);
-        assert_eq!(got[1], &ids[100..]);
-    }
-
-    #[test]
-    fn chunks_preserve_order() {
-        let ids: Vec<u64> = (0..250).collect();
-        let flat: Vec<u64> = chunks(&ids)
-            .iter()
-            .flat_map(|c| c.iter().copied())
-            .collect();
-        assert_eq!(flat, ids);
     }
 }

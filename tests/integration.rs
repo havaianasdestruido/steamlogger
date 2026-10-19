@@ -108,19 +108,7 @@ fn summary_to_current_game_fixture() {
 fn parse_friends_fixture() {
     let json = include_str!("fixtures/friends.json");
     let friends = api::parse_friends(json).expect("parse fixture");
-    assert_eq!(
-        friends,
-        vec![
-            api::Friend {
-                steam_id: TF2_FRIEND_STEAM_ID,
-                persona_name: String::new(),
-            },
-            api::Friend {
-                steam_id: CS2_FRIEND_STEAM_ID,
-                persona_name: String::new(),
-            },
-        ]
-    );
+    assert_eq!(friends, vec![TF2_FRIEND_STEAM_ID, CS2_FRIEND_STEAM_ID]);
 }
 
 #[test]
