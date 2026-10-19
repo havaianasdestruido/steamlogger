@@ -37,13 +37,6 @@ impl RawPlayerSummary<'_> {
     }
 }
 
-/// A friend, as reported by GetFriendList.
-#[derive(Debug, Clone, PartialEq)]
-pub struct Friend {
-    pub steam_id: u64,
-    pub persona_name: String,
-}
-
 /// A player summary row from GetPlayerSummaries.
 #[derive(Debug, Clone, PartialEq)]
 pub struct PlayerSummary {
@@ -174,25 +167,21 @@ pub fn parse_player_summaries(json: &str) -> anyhow::Result<Vec<PlayerSummary>> 
 }
 
 /// Parse a GetFriendList response body into friends (relationship == "friend").
-pub fn parse_friends(json: &str) -> anyhow::Result<Vec<Friend>> {
+pub fn parse_friends(json: &str) -> anyhow::Result<Vec<u64>> {
     // ⚡ Bolt optimization: Use zero-copy deserialization for the friend list API response.
     // By borrowing `&str` from the raw JSON instead of allocating `String`s for `steamid`
     // and `relationship`, we eliminate 2 * N heap allocations per poll tick (where N is
     // the number of friends). The `steamid` is parsed directly into a `u64` and the strings
     // are discarded, making this a pure zero-copy operation.
+    // ⚡ Bolt further optimization: we return `Vec<u64>` directly, saving unnecessary String
+    // allocations per friend because persona_name wasn't used until `summaries` are fetched.
     let resp: FriendListResponse<'_> = serde_json::from_str(json)?;
     Ok(resp
         .friendslist
         .friends
         .into_iter()
         .filter(|f| f.relationship == "friend")
-        .filter_map(|f| {
-            let steam_id = f.steamid.parse().ok()?;
-            Some(Friend {
-                steam_id,
-                persona_name: String::new(),
-            })
-        })
+        .filter_map(|f| f.steamid.parse().ok())
         .collect())
 }
 
@@ -324,19 +313,7 @@ mod tests {
             {"steamid":"76561198000000003","relationship":"friend","friend_since":1700000001}
         ]}}"#;
         let friends = parse_friends(json).expect("valid payload");
-        assert_eq!(
-            friends,
-            vec![
-                Friend {
-                    steam_id: 76561198000000001,
-                    persona_name: String::new()
-                },
-                Friend {
-                    steam_id: 76561198000000003,
-                    persona_name: String::new()
-                },
-            ]
-        );
+        assert_eq!(friends, vec![76561198000000001, 76561198000000003]);
     }
 
     #[test]

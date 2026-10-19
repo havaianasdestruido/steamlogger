@@ -64,8 +64,8 @@ pub fn analyze(
     let Ok(friends) = client.friends(me) else {
         return Enrichment::default();
     };
-    let ids: Vec<u64> = friends.iter().map(|f| f.steam_id).collect();
-    let Ok(summaries) = client.summaries(&ids) else {
+    // ⚡ Bolt optimization: `friends` is already a `Vec<u64>`, so we can pass it directly.
+    let Ok(summaries) = client.summaries(&friends) else {
         return Enrichment::default();
     };
     let (server, map) = server_and_map(a2s, game);
