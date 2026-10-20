@@ -49,22 +49,23 @@ impl Tracker {
     /// - active + same game -> `Running`
     /// - active + different game -> close old, push new, `Started`
     /// - active + none -> close old, `Ended`
-    pub fn update(&mut self, game: &CurrentGame, now: &str) -> SessionEvent {
+    pub fn update(&mut self, game: &CurrentGame, now: impl FnOnce() -> String) -> SessionEvent {
         match self.active_index {
             None => {
                 self.log
                     .games
-                    .push(LogEntry::new(game.name.clone(), now.to_string()));
+                    .push(LogEntry::new(game.name.clone(), now()));
                 let index = self.log.games.len() - 1;
                 self.active_index = Some(index);
                 SessionEvent::Started(index)
             }
             Some(index) if self.log.games[index].name == game.name => SessionEvent::Running(index),
             Some(index) => {
-                self.close_at(index, now);
+                let now_str = now();
+                self.close_at(index, &now_str);
                 self.log
                     .games
-                    .push(LogEntry::new(game.name.clone(), now.to_string()));
+                    .push(LogEntry::new(game.name.clone(), now_str));
                 let new_index = self.log.games.len() - 1;
                 self.active_index = Some(new_index);
                 SessionEvent::Started(new_index)
@@ -73,10 +74,10 @@ impl Tracker {
     }
 
     /// Explicitly close the active session (used when the poll reports no game).
-    pub fn end_active(&mut self, now: &str) -> SessionEvent {
+    pub fn end_active(&mut self, now: impl FnOnce() -> String) -> SessionEvent {
         match self.active_index {
             Some(index) => {
-                self.close_at(index, now);
+                self.close_at(index, &now());
                 self.active_index = None;
                 SessionEvent::Ended
             }
@@ -159,7 +160,7 @@ mod tests {
     #[test]
     fn start() {
         let mut t = Tracker::new(GameLog::default());
-        assert_eq!(t.update(&game("Dota 2"), "T0"), SessionEvent::Started(0));
+        assert_eq!(t.update(&game("Dota 2"), || "T0".to_string()), SessionEvent::Started(0));
         assert_eq!(t.active_index(), Some(0));
         let entries = &t.log().games;
         assert_eq!(entries.len(), 1);
@@ -171,8 +172,8 @@ mod tests {
     #[test]
     fn running() {
         let mut t = Tracker::new(GameLog::default());
-        t.update(&game("Dota 2"), "T0");
-        assert_eq!(t.update(&game("Dota 2"), "T1"), SessionEvent::Running(0));
+        t.update(&game("Dota 2"), || "T0".to_string());
+        assert_eq!(t.update(&game("Dota 2"), || "T1".to_string()), SessionEvent::Running(0));
         assert_eq!(t.active_index(), Some(0));
         assert_eq!(t.log().games.len(), 1);
         assert!(t.log().games[0].end.is_none());
@@ -181,8 +182,8 @@ mod tests {
     #[test]
     fn switch() {
         let mut t = Tracker::new(GameLog::default());
-        t.update(&game("Dota 2"), "T0");
-        assert_eq!(t.update(&game("CS2"), "T1"), SessionEvent::Started(1));
+        t.update(&game("Dota 2"), || "T0".to_string());
+        assert_eq!(t.update(&game("CS2"), || "T1".to_string()), SessionEvent::Started(1));
         assert_eq!(t.active_index(), Some(1));
         let entries = &t.log().games;
         assert_eq!(entries.len(), 2);
@@ -195,11 +196,11 @@ mod tests {
     #[test]
     fn end() {
         let mut t = Tracker::new(GameLog::default());
-        t.update(&game("Dota 2"), "T0");
-        assert_eq!(t.end_active("T2"), SessionEvent::Ended);
+        t.update(&game("Dota 2"), || "T0".to_string());
+        assert_eq!(t.end_active(|| "T2".to_string()), SessionEvent::Ended);
         assert_eq!(t.active_index(), None);
         assert_eq!(t.log().games[0].end.as_deref(), Some("T2"));
-        assert_eq!(t.end_active("T3"), SessionEvent::Idle);
+        assert_eq!(t.end_active(|| "T3".to_string()), SessionEvent::Idle);
         assert_eq!(t.log().games[0].end.as_deref(), Some("T2"));
     }
 
@@ -210,9 +211,9 @@ mod tests {
             .push(LogEntry::new("Dota 2".to_string(), "T0".to_string()));
         let mut t = Tracker::new(log);
         assert_eq!(t.active_index(), Some(0));
-        assert_eq!(t.update(&game("Dota 2"), "T1"), SessionEvent::Running(0));
+        assert_eq!(t.update(&game("Dota 2"), || "T1".to_string()), SessionEvent::Running(0));
         assert_eq!(t.log().games.len(), 1);
-        assert_eq!(t.end_active("T2"), SessionEvent::Ended);
+        assert_eq!(t.end_active(|| "T2".to_string()), SessionEvent::Ended);
         assert_eq!(t.log().games[0].end.as_deref(), Some("T2"));
         assert_eq!(t.active_index(), None);
     }
@@ -230,7 +231,7 @@ mod tests {
     #[test]
     fn apply_meta() {
         let mut t = Tracker::new(GameLog::default());
-        t.update(&game("Dota 2"), "T0");
+        t.update(&game("Dota 2"), || "T0".to_string());
         t.apply_meta(
             0,
             Some("dota"),
@@ -270,8 +271,8 @@ mod tests {
     #[test]
     fn into_log_returns_underlying() {
         let mut t = Tracker::new(GameLog::default());
-        t.update(&game("Dota 2"), "T0");
-        t.end_active("T1");
+        t.update(&game("Dota 2"), || "T0".to_string());
+        t.end_active(|| "T1".to_string());
         let log = t.into_log();
         assert_eq!(log.games.len(), 1);
         assert_eq!(log.games[0].name, "Dota 2");

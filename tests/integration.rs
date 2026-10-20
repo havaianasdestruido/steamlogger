@@ -134,8 +134,8 @@ fn tracker_end_to_end() {
     let game1 = game("Team Fortress 2");
     let game2 = game("Counter-Strike 2");
 
-    assert_eq!(t.update(&game1, "T0"), tracker::SessionEvent::Started(0));
-    assert_eq!(t.update(&game1, "T1"), tracker::SessionEvent::Running(0));
+    assert_eq!(t.update(&game1, || "T0".to_string()), tracker::SessionEvent::Started(0));
+    assert_eq!(t.update(&game1, || "T1".to_string()), tracker::SessionEvent::Running(0));
     t.apply_meta(
         0,
         Some("cp_dustbowl"),
@@ -145,10 +145,10 @@ fn tracker_end_to_end() {
     )
     .expect("apply meta");
 
-    assert_eq!(t.update(&game2, "T2"), tracker::SessionEvent::Started(1));
+    assert_eq!(t.update(&game2, || "T2".to_string()), tracker::SessionEvent::Started(1));
     assert_eq!(t.log().games[0].end.as_deref(), Some("T2"));
 
-    assert_eq!(t.end_active("T3"), tracker::SessionEvent::Ended);
+    assert_eq!(t.end_active(|| "T3".to_string()), tracker::SessionEvent::Ended);
 
     let log = t.into_log();
     assert_eq!(log.games.len(), 2);
@@ -178,8 +178,8 @@ fn tracker_resume_closes_open_session() {
     assert_eq!(t.active_index(), Some(0));
 
     let game1 = game("Team Fortress 2");
-    assert_eq!(t.update(&game1, "T1"), tracker::SessionEvent::Running(0));
-    assert_eq!(t.end_active("T2"), tracker::SessionEvent::Ended);
+    assert_eq!(t.update(&game1, || "T1".to_string()), tracker::SessionEvent::Running(0));
+    assert_eq!(t.end_active(|| "T2".to_string()), tracker::SessionEvent::Ended);
 
     let log = t.into_log();
     assert_eq!(log.games.len(), 1);

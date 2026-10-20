@@ -59,7 +59,7 @@ fn run(config: &config::Config) -> ExitCode {
 
         match client.current_game(config.steam_id) {
             Ok(Some(game)) => {
-                let event = tracker.update(&game, &now());
+                let event = tracker.update(&game, now);
                 match event {
                     steamlogger::tracker::SessionEvent::Running(_) => {}
                     _ => dirty = true,
@@ -83,7 +83,7 @@ fn run(config: &config::Config) -> ExitCode {
                 }
             }
             Ok(None) => {
-                let event = tracker.end_active(&now());
+                let event = tracker.end_active(now);
                 if event != steamlogger::tracker::SessionEvent::Idle {
                     dirty = true;
                 }

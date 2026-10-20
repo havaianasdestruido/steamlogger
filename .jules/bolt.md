@@ -23,3 +23,6 @@
 ## 2024-10-23 - Avoid intermediate structs and Vec collections for unused data
 **Learning:** The friend list parsing created a `Vec<Friend>` where `persona_name` was just a dummy `String::new()`, which was later mapped into a `Vec<u64>`. Furthermore, chunking an array allocated a `Vec<&[u64]>` before iterating over it.
 **Action:** Extract precisely the data needed (`Vec<u64>`) directly from JSON parsing to avoid intermediary allocations, and use iterator methods like `.chunks()` directly in loops instead of collecting slices into temporary vectors.
+## 2024-11-20 - Avoid eager allocations in polling loops
+**Learning:** `Tracker::update` and `Tracker::end_active` were eagerly taking a formatted timestamp string (`&now()`), causing an unnecessary allocation on every poll tick even when the game state hadn't changed.
+**Action:** When passing computed values into a struct's state machine that are only needed upon state transition, use a closure (e.g., `impl FnOnce() -> String`) to defer the evaluation and allocation until it's actually required.
