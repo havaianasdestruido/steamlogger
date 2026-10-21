@@ -23,3 +23,7 @@
 ## 2024-10-23 - Avoid intermediate structs and Vec collections for unused data
 **Learning:** The friend list parsing created a `Vec<Friend>` where `persona_name` was just a dummy `String::new()`, which was later mapped into a `Vec<u64>`. Furthermore, chunking an array allocated a `Vec<&[u64]>` before iterating over it.
 **Action:** Extract precisely the data needed (`Vec<u64>`) directly from JSON parsing to avoid intermediary allocations, and use iterator methods like `.chunks()` directly in loops instead of collecting slices into temporary vectors.
+
+## 2024-10-24 - Lazily evaluate expensive timestamp formatting
+**Learning:** The polling loop unconditionally called `now()` on every iteration to fetch the system time and format it into a string, passing it to `tracker.update` and `tracker.end_active`. However, this timestamp is only actually used when a new session starts, an old one ends, or the game switches. For the vast majority of polling ticks where the game state hasn't changed (which is most of the time), this `String` allocation and syscall overhead was completely wasted.
+**Action:** When a method needs a dynamically generated value (like the current time or a formatted string) but only uses it conditionally, pass a closure (`impl FnOnce() -> String`) instead of the pre-computed value. This defers execution and avoids paying the cost until the value is actually needed.
