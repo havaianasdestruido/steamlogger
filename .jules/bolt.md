@@ -23,3 +23,6 @@
 ## 2024-10-23 - Avoid intermediate structs and Vec collections for unused data
 **Learning:** The friend list parsing created a `Vec<Friend>` where `persona_name` was just a dummy `String::new()`, which was later mapped into a `Vec<u64>`. Furthermore, chunking an array allocated a `Vec<&[u64]>` before iterating over it.
 **Action:** Extract precisely the data needed (`Vec<u64>`) directly from JSON parsing to avoid intermediary allocations, and use iterator methods like `.chunks()` directly in loops instead of collecting slices into temporary vectors.
+## 2024-10-24 - Lazy evaluation for recurring timestamp generation
+**Learning:** The polling loop in `main.rs` was formatting the current time as an RFC3339 string unconditionally every 5 seconds via `now()`, even when the game state was `Running` or `Idle` (which represents 99% of the app's lifetime). The `Tracker` only actually uses this timestamp when a session starts or ends.
+**Action:** Use closures (`impl FnOnce() -> String`) to lazily evaluate expensive or allocating operations (like date formatting) in tight loops or polling ticks, ensuring they are only computed when state transitions actually require them.
