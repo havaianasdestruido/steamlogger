@@ -24,14 +24,14 @@ impl RawPlayerSummary<'_> {
     /// Maps a raw row to a `PlayerSummary`, skipping rows with unparseable ids.
     fn into_summary(self) -> Option<PlayerSummary> {
         let steam_id = self.steamid.parse().ok()?;
-        let game_id = self.gameid.as_deref().map(str::parse).transpose().ok()?;
+        let game_id = self.gameid.as_deref().map(str::parse).transpose().ok()??;
         Some(PlayerSummary {
             steam_id,
-            persona_name: self.personaname,
+            persona_name: self.personaname.into_owned(),
             game_id,
-            game_extra_info: self.gameextrainfo,
+            game_extra_info: self.gameextrainfo.map(|c| c.into_owned()),
             lobby_steam_id: self.lobbysteamid.map(|c| c.into_owned()),
-            gamedir: self.gamedir,
+            gamedir: self.gamedir.map(|c| c.into_owned()),
             gameserver_ip: self.gameserverip.map(|c| c.into_owned()),
         })
     }
@@ -42,7 +42,7 @@ impl RawPlayerSummary<'_> {
 pub struct PlayerSummary {
     pub steam_id: u64,
     pub persona_name: String,
-    pub game_id: Option<u32>,
+    pub game_id: u32,
     pub game_extra_info: Option<String>,
     pub lobby_steam_id: Option<String>,
     pub gamedir: Option<String>,
@@ -50,19 +50,19 @@ pub struct PlayerSummary {
 }
 
 /// Converts a player summary into a `CurrentGame` when the player is in-game.
-pub fn summary_to_current_game(summary: &PlayerSummary) -> Option<CurrentGame> {
-    let app_id = summary.game_id?;
+pub fn summary_to_current_game(summary: &PlayerSummary) -> CurrentGame {
+    let app_id = summary.game_id;
     let name = summary
         .game_extra_info
         .clone()
         .unwrap_or_else(|| format!("App {app_id}"));
-    Some(CurrentGame {
+    CurrentGame {
         app_id,
         name,
         gamedir: summary.gamedir.clone(),
         lobby_steam_id: summary.lobby_steam_id.clone(),
         gameserver_ip: summary.gameserver_ip.clone(),
-    })
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -85,17 +85,18 @@ pub struct PlayerSummariesBody<'a> {
 pub struct RawPlayerSummary<'a> {
     #[serde(borrow)]
     pub steamid: std::borrow::Cow<'a, str>,
-    pub personaname: String,
+    #[serde(borrow)]
+    pub personaname: std::borrow::Cow<'a, str>,
     #[serde(default, borrow)]
     pub gameid: Option<std::borrow::Cow<'a, str>>,
-    #[serde(default)]
-    pub gameextrainfo: Option<String>,
+    #[serde(default, borrow)]
+    pub gameextrainfo: Option<std::borrow::Cow<'a, str>>,
     #[serde(default, borrow)]
     pub lobbysteamid: Option<std::borrow::Cow<'a, str>>,
     #[serde(default, borrow)]
     pub gameserverip: Option<std::borrow::Cow<'a, str>>,
-    #[serde(default)]
-    pub gamedir: Option<String>,
+    #[serde(default, borrow)]
+    pub gamedir: Option<std::borrow::Cow<'a, str>>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -195,31 +196,17 @@ mod tests {
     use super::*;
 
     #[test]
-    fn summary_without_game_is_none() {
-        let s = PlayerSummary {
-            steam_id: 1,
-            persona_name: "x".into(),
-            game_id: None,
-            game_extra_info: None,
-            lobby_steam_id: None,
-            gamedir: None,
-            gameserver_ip: None,
-        };
-        assert!(summary_to_current_game(&s).is_none());
-    }
-
-    #[test]
     fn summary_to_current_game_maps_fields() {
         let s = PlayerSummary {
             steam_id: 76561198000000000,
             persona_name: "Foo".into(),
-            game_id: Some(440),
+            game_id: 440,
             game_extra_info: Some("Team Fortress 2".into()),
             lobby_steam_id: Some("109775241716070123".into()),
             gamedir: Some("tf".into()),
             gameserver_ip: Some("192.168.1.1:27015".into()),
         };
-        let g = summary_to_current_game(&s).expect("in game");
+        let g = summary_to_current_game(&s);
         assert_eq!(
             g,
             CurrentGame {
@@ -237,47 +224,35 @@ mod tests {
         let s = PlayerSummary {
             steam_id: 1,
             persona_name: "x".into(),
-            game_id: Some(440),
+            game_id: 440,
             game_extra_info: None,
             lobby_steam_id: None,
             gamedir: None,
             gameserver_ip: None,
         };
-        let g = summary_to_current_game(&s).expect("in game");
+        let g = summary_to_current_game(&s);
         assert_eq!(g.app_id, 440);
         assert_eq!(g.name, "App 440");
     }
 
     #[test]
-    fn parse_player_summaries_maps_in_game_and_idle_players() {
+    fn parse_player_summaries_ignores_idle_players() {
         let json = r#"{"response":{"players":[
             {"steamid":"76561198000000000","personaname":"Foo","gameid":"440","gameextrainfo":"Team Fortress 2","lobbysteamid":"109775241716070123","gameserverip":"192.168.1.1:27015","gamedir":"tf"},
             {"steamid":"76561198000000001","personaname":"Bar"}
         ]}}"#;
         let rows = parse_player_summaries(json).expect("valid payload");
-        assert_eq!(rows.len(), 2);
+        assert_eq!(rows.len(), 1);
         assert_eq!(
             rows[0],
             PlayerSummary {
                 steam_id: 76561198000000000,
                 persona_name: "Foo".into(),
-                game_id: Some(440),
+                game_id: 440,
                 game_extra_info: Some("Team Fortress 2".into()),
                 lobby_steam_id: Some("109775241716070123".into()),
                 gamedir: Some("tf".into()),
                 gameserver_ip: Some("192.168.1.1:27015".into()),
-            }
-        );
-        assert_eq!(
-            rows[1],
-            PlayerSummary {
-                steam_id: 76561198000000001,
-                persona_name: "Bar".into(),
-                game_id: None,
-                game_extra_info: None,
-                lobby_steam_id: None,
-                gamedir: None,
-                gameserver_ip: None,
             }
         );
     }
@@ -296,8 +271,8 @@ mod tests {
     #[test]
     fn parse_player_summaries_skips_row_with_bad_steamid() {
         let json = r#"{"response":{"players":[
-            {"steamid":"not-a-number","personaname":"Broken"},
-            {"steamid":"76561198000000001","personaname":"Good"}
+            {"steamid":"not-a-number","personaname":"Broken","gameid":"440"},
+            {"steamid":"76561198000000001","personaname":"Good","gameid":"440"}
         ]}}"#;
         let rows = parse_player_summaries(json).expect("valid payload");
         assert_eq!(rows.len(), 1);

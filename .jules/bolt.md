@@ -26,3 +26,7 @@
 ## 2024-10-24 - Lazy evaluation for recurring timestamp generation
 **Learning:** The polling loop in `main.rs` was formatting the current time as an RFC3339 string unconditionally every 5 seconds via `now()`, even when the game state was `Running` or `Idle` (which represents 99% of the app's lifetime). The `Tracker` only actually uses this timestamp when a session starts or ends.
 **Action:** Use closures (`impl FnOnce() -> String`) to lazily evaluate expensive or allocating operations (like date formatting) in tight loops or polling ticks, ensuring they are only computed when state transitions actually require them.
+
+## 2024-10-25 - Skip string allocations for unused API data
+**Learning:** `PlayerSummariesResponse` was parsed and allocating strings (like persona names and game details) for every friend, even though the application only cares about friends who are actually in a game. Offline friends (the vast majority of a typical friend list) caused many unnecessary `String` heap allocations on every poll tick.
+**Action:** When filtering out irrelevant data from a JSON payload, parse only what is required to determine relevance (like `game_id`), and drop irrelevant rows early before calling `.into_owned()` or allocating `String`s for other fields.
