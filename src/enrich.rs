@@ -16,7 +16,7 @@ pub struct Enrichment {
 pub fn same_game_friends(summaries: &[PlayerSummary], game: &CurrentGame) -> Vec<String> {
     let mut names: Vec<String> = summaries
         .iter()
-        .filter(|s| s.game_id == Some(game.app_id))
+        .filter(|s| s.game_id == game.app_id)
         .map(|s| s.persona_name.clone())
         .collect();
     names.sort();
@@ -93,7 +93,7 @@ mod tests {
     fn summary(
         steam_id: u64,
         persona_name: &str,
-        game_id: Option<u32>,
+        game_id: u32,
         lobby: Option<&str>,
     ) -> PlayerSummary {
         PlayerSummary {
@@ -128,11 +128,11 @@ mod tests {
     fn same_game_friends_filters_sorts_dedupes() {
         let game = game(440, None, None);
         let summaries = [
-            summary(1, "zed", Some(440), None),
-            summary(2, "alpha", Some(440), None),
-            summary(3, "bravo", Some(730), None),
-            summary(4, "alpha", Some(440), None),
-            summary(5, "delta", None, None),
+            summary(1, "zed", 440, None),
+            summary(2, "alpha", 440, None),
+            summary(3, "bravo", 730, None),
+            summary(4, "alpha", 440, None),
+            summary(5, "delta", 999, None),
         ];
         assert_eq!(same_game_friends(&summaries, &game), vec!["alpha", "zed"]);
     }
@@ -141,11 +141,11 @@ mod tests {
     fn lobby_friends_matches_same_lobby() {
         let game = game(440, Some("lobby-1"), None);
         let summaries = [
-            summary(1, "zed", Some(440), Some("lobby-1")),
-            summary(2, "alpha", Some(440), Some("lobby-1")),
-            summary(3, "bravo", Some(440), Some("lobby-2")),
-            summary(4, "alpha", Some(440), Some("lobby-1")),
-            summary(5, "delta", Some(440), None),
+            summary(1, "zed", 440, Some("lobby-1")),
+            summary(2, "alpha", 440, Some("lobby-1")),
+            summary(3, "bravo", 440, Some("lobby-2")),
+            summary(4, "alpha", 440, Some("lobby-1")),
+            summary(5, "delta", 440, None),
         ];
         assert_eq!(lobby_friends(&summaries, &game), vec!["alpha", "zed"]);
     }
@@ -153,7 +153,7 @@ mod tests {
     #[test]
     fn lobby_friends_ignored_when_no_lobby() {
         let game = game(440, None, None);
-        let summaries = [summary(1, "zed", Some(440), Some("lobby-1"))];
+        let summaries = [summary(1, "zed", 440, Some("lobby-1"))];
         assert!(lobby_friends(&summaries, &game).is_empty());
     }
 
@@ -168,8 +168,8 @@ mod tests {
     fn build_assembles_enrichment() {
         let game = game(440, Some("lobby-1"), None);
         let summaries = [
-            summary(1, "zed", Some(440), Some("lobby-1")),
-            summary(2, "bravo", Some(730), None),
+            summary(1, "zed", 440, Some("lobby-1")),
+            summary(2, "bravo", 730, None),
         ];
         let got = build(
             &summaries,

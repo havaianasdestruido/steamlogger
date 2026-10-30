@@ -72,18 +72,18 @@ fn parse_player_summaries_fixture() {
     let me = &summaries[0];
     assert_eq!(me.steam_id, TRACKED_STEAM_ID);
     assert_eq!(me.persona_name, "rocketjumper42");
-    assert_eq!(me.game_id, Some(440));
+    assert_eq!(me.game_id, 440);
     assert_eq!(me.game_extra_info.as_deref(), Some("Team Fortress 2"));
     assert_eq!(me.lobby_steam_id.as_deref(), Some(LOBBY_STEAM_ID));
 
     let tf2_friend = &summaries[1];
     assert_eq!(tf2_friend.steam_id, TF2_FRIEND_STEAM_ID);
-    assert_eq!(tf2_friend.game_id, Some(440));
+    assert_eq!(tf2_friend.game_id, 440);
     assert_eq!(tf2_friend.lobby_steam_id.as_deref(), Some(LOBBY_STEAM_ID));
 
     let cs2_friend = &summaries[2];
     assert_eq!(cs2_friend.steam_id, CS2_FRIEND_STEAM_ID);
-    assert_eq!(cs2_friend.game_id, Some(730));
+    assert_eq!(cs2_friend.game_id, 730);
     assert!(cs2_friend.lobby_steam_id.is_none());
 }
 
@@ -91,7 +91,7 @@ fn parse_player_summaries_fixture() {
 fn summary_to_current_game_fixture() {
     let json = include_str!("fixtures/player_summaries.json");
     let summaries = api::parse_player_summaries(json).expect("parse fixture");
-    let game = api::summary_to_current_game(&summaries[0]).expect("tracked user in game");
+    let game = api::summary_to_current_game(&summaries[0]);
     assert_eq!(
         game,
         api::CurrentGame {
@@ -115,7 +115,7 @@ fn parse_friends_fixture() {
 fn enrich_same_lobby_from_fixture() {
     let json = include_str!("fixtures/player_summaries.json");
     let summaries = api::parse_player_summaries(json).expect("parse fixture");
-    let game = api::summary_to_current_game(&summaries[0]).expect("tracked user in game");
+    let game = api::summary_to_current_game(&summaries[0]);
     let friends: Vec<api::PlayerSummary> = summaries
         .into_iter()
         .filter(|s| s.steam_id != TRACKED_STEAM_ID)
