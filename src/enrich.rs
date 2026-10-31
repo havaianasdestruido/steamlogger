@@ -14,14 +14,17 @@ pub struct Enrichment {
 /// Friends among `summaries` currently playing the same game as `game`.
 /// Returns sorted, deduplicated persona names.
 pub fn same_game_friends(summaries: &[PlayerSummary], game: &CurrentGame) -> Vec<String> {
-    let mut names: Vec<String> = summaries
+    // ⚡ Bolt optimization: Extract borrowed strings into a vector, sort and dedupe,
+    // and only then clone them into the final Vec<String>. This avoids allocating
+    // heap memory for strings that are later filtered out by dedup.
+    let mut names: Vec<&String> = summaries
         .iter()
         .filter(|s| s.game_id == game.app_id)
-        .map(|s| s.persona_name.clone())
+        .map(|s| &s.persona_name)
         .collect();
     names.sort();
     names.dedup();
-    names
+    names.into_iter().cloned().collect()
 }
 
 /// Friends among `summaries` in the exact same lobby as `game` (matching
@@ -30,14 +33,17 @@ pub fn lobby_friends(summaries: &[PlayerSummary], game: &CurrentGame) -> Vec<Str
     let Some(lobby) = game.lobby_steam_id.as_deref() else {
         return Vec::new();
     };
-    let mut names: Vec<String> = summaries
+    // ⚡ Bolt optimization: Extract borrowed strings into a vector, sort and dedupe,
+    // and only then clone them into the final Vec<String>. This avoids allocating
+    // heap memory for strings that are later filtered out by dedup.
+    let mut names: Vec<&String> = summaries
         .iter()
         .filter(|s| s.lobby_steam_id.as_deref() == Some(lobby))
-        .map(|s| s.persona_name.clone())
+        .map(|s| &s.persona_name)
         .collect();
     names.sort();
     names.dedup();
-    names
+    names.into_iter().cloned().collect()
 }
 
 /// Resolve server name + current map from the game server Steam reports.

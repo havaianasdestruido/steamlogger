@@ -30,3 +30,6 @@
 ## 2024-10-25 - Skip string allocations for unused API data
 **Learning:** `PlayerSummariesResponse` was parsed and allocating strings (like persona names and game details) for every friend, even though the application only cares about friends who are actually in a game. Offline friends (the vast majority of a typical friend list) caused many unnecessary `String` heap allocations on every poll tick.
 **Action:** When filtering out irrelevant data from a JSON payload, parse only what is required to determine relevance (like `game_id`), and drop irrelevant rows early before calling `.into_owned()` or allocating `String`s for other fields.
+## 2024-10-25 - Avoid vector allocation when sorting friends
+**Learning:** `same_game_friends` and `lobby_friends` were creating a `Vec<String>` where each element was cloned, then sorting and deduplicating. Since Strings are allocated on the heap, this cloned memory unconditionally.
+**Action:** When filtering and sorting data from borrowed values to create an owned output, it is more performant to first sort and deduplicate `Vec<&String>` (or `Vec<&str>`), and only then `.cloned().collect()` the final results to minimize heap allocations of Strings.
