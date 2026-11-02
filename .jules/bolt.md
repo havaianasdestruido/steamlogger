@@ -33,3 +33,7 @@
 ## 2024-10-25 - Avoid vector allocation when sorting friends
 **Learning:** `same_game_friends` and `lobby_friends` were creating a `Vec<String>` where each element was cloned, then sorting and deduplicating. Since Strings are allocated on the heap, this cloned memory unconditionally.
 **Action:** When filtering and sorting data from borrowed values to create an owned output, it is more performant to first sort and deduplicate `Vec<&String>` (or `Vec<&str>`), and only then `.cloned().collect()` the final results to minimize heap allocations of Strings.
+
+## 2025-02-12 - [Eliminated heap allocations in A2S UDP packet handling]
+**Learning:** UDP communication in the A2S client frequently triggers heap allocations by using `Vec<u8>` for constructing short request payloads and copying received buffers.
+**Action:** Always prefer using stack-allocated buffers (e.g., `[u8; 16]`) to construct short payloads and return slices or byte counts when interacting with sockets to eliminate unnecessary `Vec` allocations.
