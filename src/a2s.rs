@@ -36,20 +36,23 @@ impl A2sClient {
         socket.set_read_timeout(Some(self.timeout))?;
         socket.connect(target)?;
 
-        socket.send(&request_payload(None))?;
+        let mut req_buf = [0u8; 16];
+        socket.send(request_payload(&mut req_buf, None))?;
         let mut buf = [0u8; 4096];
-        let mut packet = receive_packet(&socket, &mut buf)?;
+        let mut n = receive_packet(&socket, &mut buf)?;
+        let mut packet = &buf[..n];
 
-        if is_challenge(&packet) {
-            let challenge = read_challenge(&packet)?;
-            socket.send(&request_payload(Some(challenge)))?;
-            packet = receive_packet(&socket, &mut buf)?;
-            if is_challenge(&packet) {
+        if is_challenge(packet) {
+            let challenge = read_challenge(packet)?;
+            socket.send(request_payload(&mut req_buf, Some(challenge)))?;
+            n = receive_packet(&socket, &mut buf)?;
+            packet = &buf[..n];
+            if is_challenge(packet) {
                 anyhow::bail!("server replied to A2S_INFO challenge with another challenge");
             }
         }
 
-        parse_response(&packet)
+        parse_response(packet)
     }
 }
 
@@ -69,24 +72,31 @@ fn resolve_addr(addr: &str) -> anyhow::Result<SocketAddr> {
         .ok_or_else(|| anyhow::anyhow!("could not resolve address {addr}"))
 }
 
-fn request_payload(challenge: Option<i32>) -> Vec<u8> {
-    let mut v = Vec::with_capacity(16);
-    v.extend_from_slice(&MAGIC);
+// ⚡ Bolt optimization: Use a stack-allocated buffer to construct the A2S_INFO
+// payload instead of allocating a `Vec<u8>` every time.
+fn request_payload(buf: &mut [u8; 16], challenge: Option<i32>) -> &[u8] {
+    buf[0..4].copy_from_slice(&MAGIC);
     match challenge {
-        None => v.extend_from_slice(b"TSOURCE\0"),
+        None => {
+            buf[4..12].copy_from_slice(b"TSOURCE\0");
+            &buf[..12]
+        }
         Some(c) => {
-            v.push(TYPE_CHALLENGE);
-            v.extend_from_slice(&c.to_le_bytes());
+            buf[4] = TYPE_CHALLENGE;
+            buf[5..9].copy_from_slice(&c.to_le_bytes());
+            &buf[..9]
         }
     }
-    v
 }
 
-fn receive_packet(socket: &UdpSocket, buf: &mut [u8; 4096]) -> anyhow::Result<Vec<u8>> {
+// ⚡ Bolt optimization: Return the number of bytes read instead of copying the
+// buffer into a new `Vec<u8>`. This eliminates a heap allocation when receiving
+// packets from the server.
+fn receive_packet(socket: &UdpSocket, buf: &mut [u8; 4096]) -> anyhow::Result<usize> {
     let n = socket
         .recv(buf)
         .map_err(|e| anyhow::anyhow!("A2S_INFO query failed: {e}"))?;
-    Ok(buf[..n].to_vec())
+    Ok(n)
 }
 
 fn is_challenge(packet: &[u8]) -> bool {
@@ -247,7 +257,8 @@ mod tests {
         assert_eq!(info.map, "de_dust2");
 
         let (sent, _) = rx.recv().unwrap();
-        assert_eq!(sent, request_payload(None));
+        let mut req_buf = [0u8; 16];
+        assert_eq!(&sent, request_payload(&mut req_buf, None));
     }
 
     #[test]
@@ -266,7 +277,8 @@ mod tests {
         let info = client.query("127.0.0.1").unwrap();
         assert_eq!(info.map, "de_dust2");
         let (sent, _) = rx.recv().unwrap();
-        assert_eq!(sent, request_payload(None));
+        let mut req_buf = [0u8; 16];
+        assert_eq!(&sent, request_payload(&mut req_buf, None));
     }
 
     #[test]
@@ -278,14 +290,16 @@ mod tests {
         thread::spawn(move || {
             let mut buf = [0u8; 4096];
             let (n, from) = listener.recv_from(&mut buf).unwrap();
-            assert_eq!(buf[..n], request_payload(None));
+            let mut req_buf = [0u8; 16];
+            assert_eq!(&buf[..n], request_payload(&mut req_buf, None));
             let mut c = Vec::new();
             c.extend_from_slice(&MAGIC);
             c.push(TYPE_CHALLENGE);
             c.extend_from_slice(&challenge.to_le_bytes());
             listener.send_to(&c, from).unwrap();
             let (n, from) = listener.recv_from(&mut buf).unwrap();
-            assert_eq!(buf[..n], request_payload(Some(challenge)));
+            let mut req_buf = [0u8; 16];
+            assert_eq!(&buf[..n], request_payload(&mut req_buf, Some(challenge)));
             listener.send_to(&reply, from).unwrap();
         });
 
@@ -302,14 +316,16 @@ mod tests {
         thread::spawn(move || {
             let mut buf = [0u8; 4096];
             let (n, from) = listener.recv_from(&mut buf).unwrap();
-            assert_eq!(buf[..n], request_payload(None));
+            let mut req_buf = [0u8; 16];
+            assert_eq!(&buf[..n], request_payload(&mut req_buf, None));
             let mut c = Vec::new();
             c.extend_from_slice(&MAGIC);
             c.push(TYPE_CHALLENGE);
             c.extend_from_slice(&challenge.to_le_bytes());
             listener.send_to(&c, from).unwrap();
             let (n, from) = listener.recv_from(&mut buf).unwrap();
-            assert_eq!(buf[..n], request_payload(Some(challenge)));
+            let mut req_buf = [0u8; 16];
+            assert_eq!(&buf[..n], request_payload(&mut req_buf, Some(challenge)));
             listener.send_to(&c, from).unwrap();
         });
 
