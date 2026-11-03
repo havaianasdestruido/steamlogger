@@ -89,7 +89,7 @@ deliberately leaves it as `String::new()`. Names arrive later, via
 pub struct PlayerSummary {
     pub steam_id: u64,
     pub persona_name: String,
-    pub game_id: Option<u32>,
+    pub game_id: u32,
     pub game_extra_info: Option<String>,
     pub lobby_steam_id: Option<String>,
     pub gamedir: Option<String>,
@@ -98,8 +98,7 @@ pub struct PlayerSummary {
 ```
 
 One row of a `GetPlayerSummaries` response, with ids already parsed into
-integers. `game_id == None` means "not in a game" — which also covers players
-whose *Game details* privacy setting hides the information.
+integers. Rows without a valid game ID are excluded, including players whose game details are hidden.
 
 ## Raw response types {/* #raw-response-types */}
 
@@ -146,11 +145,11 @@ Two details worth noting:
 ### `RawPlayerSummary::into_summary` *(private)* {/* #into_summary */}
 
 ```rust
-fn into_summary(self) -> Option<PlayerSummary>
+fn into_summary(self, filter_game_id: Option<u32>) -> Option<PlayerSummary>
 ```
 
 Converts one raw row, returning `None` when `steamid` or `gameid` cannot be
-parsed as numbers. [`parse_player_summaries`](#parse_player_summaries) uses
+parsed as numbers, when `gameid` is missing, or when it does not match the optional filter. [`parse_player_summaries`](#parse_player_summaries) uses
 `filter_map`, so a single malformed row is skipped instead of failing the whole
 response.
 
@@ -215,10 +214,10 @@ include it in a bug report — the crate itself only ever passes them to
 ### `parse_player_summaries` {/* #parse_player_summaries */}
 
 ```rust
-pub fn parse_player_summaries(json: &str) -> anyhow::Result<Vec<PlayerSummary>>
+pub fn parse_player_summaries(json: &str, filter_game_id: Option<u32>) -> anyhow::Result<Vec<PlayerSummary>>
 ```
 
-Parses a `GetPlayerSummaries` body into domain rows.
+Parses a `GetPlayerSummaries` body into domain rows. `Some(app_id)` keeps only that game; `None` keeps all valid in-game rows. Offline rows are omitted. Filtering happens before retained strings are made owned.
 
 - Returns `Err` only when the envelope itself is not valid JSON of the
   expected shape.
@@ -227,7 +226,7 @@ Parses a `GetPlayerSummaries` body into domain rows.
   order of the requested ids).
 
 ```rust
-let rows = parse_player_summaries(r#"{"response":{"players":[]}}"#)?;
+let rows = parse_player_summaries(r#"{"response":{"players":[]}}"#, None)?;
 assert!(rows.is_empty());
 ```
 

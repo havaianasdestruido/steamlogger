@@ -12,6 +12,8 @@ pub struct Config {
     pub steam_id: u64,
     /// Seconds between polls of the Steam API.
     pub poll_interval_secs: u64,
+    /// Consecutive missing current-game polls tolerated before ending a session.
+    pub missed_poll_tolerance: u32,
     /// Path of the JSON log file written by the app.
     pub output_file: PathBuf,
     /// Whether to collect friends/lobby/map enrichment data.
@@ -25,6 +27,7 @@ pub struct RawConfig {
     pub api_key: Option<String>,
     pub steam_id: Option<u64>,
     pub poll_interval_secs: u64,
+    pub missed_poll_tolerance: u32,
     pub output_file: PathBuf,
     pub enrich: bool,
 }
@@ -35,6 +38,7 @@ impl Default for RawConfig {
             api_key: None,
             steam_id: None,
             poll_interval_secs: 30,
+            missed_poll_tolerance: 2,
             output_file: PathBuf::from("steamlog.json"),
             enrich: true,
         }
@@ -85,6 +89,7 @@ pub fn load(path: &Path) -> anyhow::Result<Config> {
         api_key,
         steam_id,
         poll_interval_secs: raw.poll_interval_secs,
+        missed_poll_tolerance: raw.missed_poll_tolerance,
         output_file: raw.output_file,
         enrich: raw.enrich,
     })
@@ -107,6 +112,10 @@ steam_id = 76561198000000000
 
 # Seconds between polls of the Steam API. Optional, defaults to 30.
 poll_interval_secs = 30
+
+# Consecutive polls with no current game to tolerate before ending a session.
+# Steam can briefly omit current-game data; default 2 avoids fragmented logs.
+missed_poll_tolerance = 2
 
 # Path of the JSON log file written by the app. Optional, defaults to "steamlog.json".
 output_file = "steamlog.json"
@@ -145,6 +154,7 @@ mod tests {
     fn defaults_are_sane() {
         let raw = RawConfig::default();
         assert_eq!(raw.poll_interval_secs, 30);
+        assert_eq!(raw.missed_poll_tolerance, 2);
         assert_eq!(raw.output_file, PathBuf::from("steamlog.json"));
         assert!(raw.enrich);
         assert!(raw.api_key.is_none());
@@ -158,6 +168,7 @@ mod tests {
         assert_eq!(cfg.api_key, "key123");
         assert_eq!(cfg.steam_id, 76561198000000000);
         assert_eq!(cfg.poll_interval_secs, 30);
+        assert_eq!(cfg.missed_poll_tolerance, 2);
         assert_eq!(cfg.output_file, PathBuf::from("steamlog.json"));
         assert!(cfg.enrich);
         std::fs::remove_file(path).ok();
@@ -165,10 +176,11 @@ mod tests {
 
     #[test]
     fn explicit_values_override_defaults() {
-        let toml = "api_key = \"k\"\nsteam_id = 123\npoll_interval_secs = 5\noutput_file = \"out.json\"\nenrich = false\n";
+        let toml = "api_key = \"k\"\nsteam_id = 123\npoll_interval_secs = 5\nmissed_poll_tolerance = 4\noutput_file = \"out.json\"\nenrich = false\n";
         let path = temp_config_file(toml);
         let cfg = load(&path).expect("load config");
         assert_eq!(cfg.poll_interval_secs, 5);
+        assert_eq!(cfg.missed_poll_tolerance, 4);
         assert_eq!(cfg.output_file, PathBuf::from("out.json"));
         assert!(!cfg.enrich);
         std::fs::remove_file(path).ok();

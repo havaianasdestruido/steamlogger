@@ -66,7 +66,7 @@ fn config_missing_required_key_errors() {
 #[test]
 fn parse_player_summaries_fixture() {
     let json = include_str!("fixtures/player_summaries.json");
-    let summaries = api::parse_player_summaries(json).expect("parse fixture");
+    let summaries = api::parse_player_summaries(json, None).expect("parse fixture");
     assert_eq!(summaries.len(), 3);
 
     let me = &summaries[0];
@@ -88,9 +88,19 @@ fn parse_player_summaries_fixture() {
 }
 
 #[test]
+fn summary_filter_keeps_only_matching_game_from_fixture() {
+    let json = include_str!("fixtures/player_summaries.json");
+    let all = api::parse_player_summaries(json, None).expect("parse fixture");
+    let tf2 = api::parse_player_summaries(json, Some(440)).expect("parse fixture");
+    assert_eq!(tf2, all.into_iter().filter(|p| p.game_id == 440).collect::<Vec<_>>());
+    assert_eq!(tf2.len(), 2);
+    assert!(api::parse_player_summaries(json, Some(999)).unwrap().is_empty());
+}
+
+#[test]
 fn summary_to_current_game_fixture() {
     let json = include_str!("fixtures/player_summaries.json");
-    let summaries = api::parse_player_summaries(json).expect("parse fixture");
+    let summaries = api::parse_player_summaries(json, None).expect("parse fixture");
     let game = api::summary_to_current_game(&summaries[0]);
     assert_eq!(
         game,
@@ -114,7 +124,7 @@ fn parse_friends_fixture() {
 #[test]
 fn enrich_same_lobby_from_fixture() {
     let json = include_str!("fixtures/player_summaries.json");
-    let summaries = api::parse_player_summaries(json).expect("parse fixture");
+    let summaries = api::parse_player_summaries(json, None).expect("parse fixture");
     let game = api::summary_to_current_game(&summaries[0]);
     let friends: Vec<api::PlayerSummary> = summaries
         .into_iter()

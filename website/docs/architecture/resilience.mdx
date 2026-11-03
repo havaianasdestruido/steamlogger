@@ -109,7 +109,7 @@ lower intervals do not recover faster, they just fail more often.
 ## What is deliberately not handled
 
 - **No log rotation or pruning.** The file grows with your history and is
-  rewritten in full every tick. Thousands of sessions are fine (a few hundred
+  rewritten in full on changes and at shutdown. Thousands of sessions are fine (a few hundred
   KB); millions would not be.
 - **No concurrent-writer protection.** Two processes pointed at the same
   `output_file` will clobber each other. There is no lock file.

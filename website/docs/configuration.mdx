@@ -28,6 +28,7 @@ file is a fatal error (exit code `1`).
 | `api_key` | string | **yes** | — | [Steam Web API key](https://steamcommunity.com/dev/apikey). Overridable with `STEAMLOGGER_API_KEY`. |
 | `steam_id` | integer (unsigned 64-bit) | **yes** | — | SteamID64 of the tracked account, unquoted. Overridable with `STEAMLOGGER_STEAM_ID`. |
 | `poll_interval_secs` | integer (unsigned 64-bit) | no | `30` | Seconds between polls. Effective minimum is `5` — smaller values are clamped at runtime. |
+| `missed_poll_tolerance` | integer (unsigned 32-bit) | no | `2` | Number of consecutive missing game reports tolerated before ending a session. Set to `0` to end on the first miss. |
 | `output_file` | string (path) | no | `"steamlog.json"` | Where the JSON log is written. Relative paths resolve against the working directory. |
 | `enrich` | boolean | no | `true` | Collect friends / lobby / server+map data. `false` logs only name, start and end. |
 
@@ -56,6 +57,10 @@ steam_id = 76561198000000000
 
 # Seconds between polls of the Steam API. Optional, defaults to 30.
 poll_interval_secs = 30
+
+# Consecutive polls with no current game to tolerate before ending a session.
+# Steam can briefly omit current-game data; default 2 avoids fragmented logs.
+missed_poll_tolerance = 2
 
 # Path of the JSON log file written by the app. Optional, defaults to "steamlog.json".
 output_file = "steamlog.json"
@@ -162,8 +167,8 @@ steamlogger /etc/steamlogger/alice.toml &
 steamlogger /etc/steamlogger/bob.toml &
 ```
 
-Never point two processes at the same `output_file`: both rewrite the whole
-file every tick and the last writer wins.
+Never point two processes at the same `output_file`: both may rewrite the whole
+file on changes and the last writer wins.
 
 ## Choosing `output_file`
 

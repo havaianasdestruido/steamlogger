@@ -31,6 +31,7 @@ pub struct Config {
     pub api_key: String,
     pub steam_id: u64,
     pub poll_interval_secs: u64,
+    pub missed_poll_tolerance: u32,
     pub output_file: PathBuf,
     pub enrich: bool,
 }
@@ -44,6 +45,7 @@ every required key is guaranteed present. Produced only by [`load`](#load).
 | `api_key` | `String` | Non-empty by construction (an empty env var falls back to the file; an empty file value is accepted as-is). |
 | `steam_id` | `u64` | SteamID64 of the tracked account. |
 | `poll_interval_secs` | `u64` | **Not clamped here** — `main::run` applies the 5-second floor. |
+| `missed_poll_tolerance` | `u32` | Consecutive missing game reports tolerated before ending an active session; default 2. |
 | `output_file` | `PathBuf` | Relative paths resolve against the process working directory. |
 | `enrich` | `bool` | `true` enables friends/lobby/server enrichment. |
 
@@ -56,6 +58,7 @@ pub struct RawConfig {
     pub api_key: Option<String>,
     pub steam_id: Option<u64>,
     pub poll_interval_secs: u64,
+    pub missed_poll_tolerance: u32,
     pub output_file: PathBuf,
     pub enrich: bool,
 }
@@ -72,6 +75,7 @@ impl Default for RawConfig {
             api_key: None,
             steam_id: None,
             poll_interval_secs: 30,
+            missed_poll_tolerance: 2,
             output_file: PathBuf::from("steamlog.json"),
             enrich: true,
         }
@@ -120,7 +124,7 @@ keys resolved.
    (`STEAMLOGGER_STEAM_ID must be a valid u64`). An empty string therefore
    fails rather than falling back.
 6. Both values must be `Some`, else a `missing required config key …` error.
-7. The remaining three fields are copied from `RawConfig` unchanged.
+7. The remaining four fields are copied from `RawConfig` unchanged.
 
 **Errors**
 

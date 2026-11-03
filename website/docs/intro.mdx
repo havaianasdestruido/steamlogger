@@ -19,7 +19,7 @@ you were connected to.
 It is a single binary with no database, no daemon framework and no background
 service manager of its own. It polls the
 [Steam Web API](https://steamcommunity.com/dev), keeps a tiny state machine in
-memory, and rewrites one JSON file atomically on every tick.
+memory, and rewrites one JSON file atomically on changes and at shutdown.
 
 ```json title="steamlog.json"
 {
@@ -65,7 +65,7 @@ memory, and rewrites one JSON file atomically on every tick.
 flowchart LR
   A["main.rs<br/>poll loop"] -->|every N seconds| B["SteamClient<br/>current_game()"]
   B -->|Some(game)| C["Tracker<br/>start / running / switch"]
-  B -->|None| D["Tracker<br/>end_active()"]
+  B -->|None| D["Tracker<br/>observe(None)"]
   C --> E{"enrich = true?"}
   E -->|yes| F["enrich::analyze()"]
   F --> G["friends playing<br/>friends in lobby"]

@@ -21,6 +21,8 @@ pub struct Tracker {
 }
 ```
 
+The application uses `Tracker::observe` with a configurable missed-poll tolerance (default 2). A missing report keeps an active session open until the tolerance is exceeded; a game observation resets the miss count. Errors are not observations. Direct `end_active` still closes immediately, and `Tracker::new` defaults to zero tolerance.
+
 ## States and transitions
 
 ```mermaid
@@ -36,21 +38,17 @@ stateDiagram-v2
     Idle --> Idle: end_active() → Idle<br/>no-op
 ```
 
-Each poll calls exactly one of `update` (a game is running) or `end_active`
-(nothing is running), and gets back a [`SessionEvent`](../reference/tracker.mdx#sessionevent):
+Each successful poll calls `observe`, which delegates to `update` for a game or eventually `end_active` after enough misses, and gets back a [`SessionEvent`](../reference/tracker.mdx#sessionevent):
 
 | Event | Meaning | Log mutation |
 | --- | --- | --- |
 | `Started(i)` | A new session began at index `i` | New entry pushed with `start = now`, `end` absent |
-| `Running(i)` | The same game is still running | None |
+| `Running(i)` | The same game is still running or a miss is tolerated | None |
 | `Ended` | The open session was closed | `end = now` on the active entry |
 | `Idle` | Nothing was running before or after | None |
 
-:::note The binary ignores the return value
-`main` discards the `SessionEvent` (`let _event = …`); the enum exists so that
-the state machine is observable and unit-testable, and so library users can
-react to transitions. See [Library usage](../guides/library-usage.mdx).
-:::
+The binary uses events to decide when a session transition needs persistence.
+
 
 ## Switching games
 
@@ -58,8 +56,8 @@ When a poll reports a different game, both operations happen in the same tick
 with the **same timestamp**:
 
 ```rust
-t.update(&game("Dota 2"), "T0");   // Started(0)
-t.update(&game("CS2"),    "T1");   // Started(1): entry 0 gains end = "T1"
+t.update(&game("Dota 2"), || "T0".into());   // Started(0)
+t.update(&game("CS2"),    || "T1".into());   // Started(1): entry 0 gains end = "T1"
 ```
 
 ```json

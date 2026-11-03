@@ -89,9 +89,11 @@ pub mod tracker;
 | [`config::example_config`](./config.mdx#example_config) | `fn example_config() -> String` | `config` |
 | [`LogEntry::new`](./model.mdx#logentrynew) | `fn new(name: String, start: String) -> Self` | `model` |
 | [`Tracker::new`](./tracker.mdx#new) | `fn new(log: GameLog) -> Self` | `tracker` |
-| [`Tracker::update`](./tracker.mdx#update) | `fn update(&mut self, game: &CurrentGame, now: &str) -> SessionEvent` | `tracker` |
-| [`Tracker::end_active`](./tracker.mdx#end_active) | `fn end_active(&mut self, now: &str) -> SessionEvent` | `tracker` |
-| [`Tracker::apply_meta`](./tracker.mdx#apply_meta) | `fn apply_meta(&mut self, index, map, server, playing, lobby) -> anyhow::Result<()>` | `tracker` |
+| [`Tracker::update`](./tracker.mdx#update) | `fn update(&mut self, game: &CurrentGame, now: impl FnOnce() -> String) -> SessionEvent` | `tracker` |
+| [`Tracker::with_missed_tolerance`](./tracker.mdx#with_missed_tolerance) | `fn with_missed_tolerance(log: GameLog, max_missed_observations: u32) -> Self` | `tracker` |
+| [`Tracker::observe`](./tracker.mdx#observe) | `fn observe(&mut self, game: Option<&CurrentGame>, now: impl FnOnce() -> String) -> SessionEvent` | `tracker` |
+| [`Tracker::end_active`](./tracker.mdx#end_active) | `fn end_active(&mut self, now: impl FnOnce() -> String) -> SessionEvent` | `tracker` |
+| [`Tracker::apply_meta`](./tracker.mdx#apply_meta) | `fn apply_meta(&mut self, index, map, server, playing, lobby) -> anyhow::Result<bool>` | `tracker` |
 | [`Tracker::log`](./tracker.mdx#log) | `fn log(&self) -> &GameLog` | `tracker` |
 | [`Tracker::into_log`](./tracker.mdx#into_log) | `fn into_log(self) -> GameLog` | `tracker` |
 | [`Tracker::active_index`](./tracker.mdx#active_index) | `fn active_index(&self) -> Option<usize>` | `tracker` |
@@ -103,17 +105,17 @@ pub mod tracker;
 | [`storage::write_log`](./storage.mdx#write_log) | `fn write_log(path: &Path, log: &GameLog) -> anyhow::Result<()>` | `storage` |
 | [`A2sClient::new`](./a2s.mdx#new) | `fn new() -> Self` | `a2s` |
 | [`A2sClient::query`](./a2s.mdx#query) | `fn query(&mut self, addr: &str) -> anyhow::Result<ServerInfo>` | `a2s` |
-| [`api::summary_to_current_game`](./steam-api.mdx#summary_to_current_game) | `fn summary_to_current_game(&PlayerSummary) -> Option<CurrentGame>` | `steam::api` |
+| [`api::summary_to_current_game`](./steam-api.mdx#summary_to_current_game) | `fn summary_to_current_game(&PlayerSummary) -> CurrentGame` | `steam::api` |
 | [`api::player_summaries_url`](./steam-api.mdx#player_summaries_url) | `fn player_summaries_url(key: &str, ids: &[u64]) -> String` | `steam::api` |
 | [`api::friend_list_url`](./steam-api.mdx#friend_list_url) | `fn friend_list_url(key: &str, steam_id: u64) -> String` | `steam::api` |
-| [`api::parse_player_summaries`](./steam-api.mdx#parse_player_summaries) | `fn parse_player_summaries(json: &str) -> anyhow::Result<Vec<PlayerSummary>>` | `steam::api` |
+| [`api::parse_player_summaries`](./steam-api.mdx#parse_player_summaries) | `fn parse_player_summaries(json: &str, filter_game_id: Option<u32>) -> anyhow::Result<Vec<PlayerSummary>>` | `steam::api` |
 | [`api::parse_friends`](./steam-api.mdx#parse_friends) | `fn parse_friends(json: &str) -> anyhow::Result<Vec<Friend>>` | `steam::api` |
 | [`api::entry_to_json`](./steam-api.mdx#entry_to_json) | `fn entry_to_json(entry: &LogEntry) -> String` | `steam::api` |
 | [`SteamClient::new`](./steam-client.mdx#new) | `fn new(key: String) -> Self` | `steam::client` |
 | [`SteamClient::with_timeout`](./steam-client.mdx#with_timeout) | `fn with_timeout(key: String, timeout: Duration) -> Self` | `steam::client` |
 | [`SteamClient::current_game`](./steam-client.mdx#current_game) | `fn current_game(&self, steam_id: u64) -> anyhow::Result<Option<CurrentGame>>` | `steam::client` |
 | [`SteamClient::friends`](./steam-client.mdx#friends) | `fn friends(&self, steam_id: u64) -> anyhow::Result<Vec<Friend>>` | `steam::client` |
-| [`SteamClient::summaries`](./steam-client.mdx#summaries) | `fn summaries(&self, ids: &[u64]) -> anyhow::Result<Vec<PlayerSummary>>` | `steam::client` |
+| [`SteamClient::summaries`](./steam-client.mdx#summaries) | `fn summaries(&self, ids: &[u64], filter_game_id: Option<u32>) -> anyhow::Result<Vec<PlayerSummary>>` | `steam::client` |
 
 :::tip This index is enforced
 `npm run check:api` in `website/` scans `src/**/*.rs` for `pub` items and fails

@@ -22,9 +22,16 @@ pub struct CurrentGame {
 
 impl RawPlayerSummary<'_> {
     /// Maps a raw row to a `PlayerSummary`, skipping rows with unparseable ids.
-    fn into_summary(self) -> Option<PlayerSummary> {
+    fn into_summary(self, filter_game_id: Option<u32>) -> Option<PlayerSummary> {
         let steam_id = self.steamid.parse().ok()?;
         let game_id = self.gameid.as_deref().map(str::parse).transpose().ok()??;
+
+        if let Some(target_game_id) = filter_game_id {
+            if game_id != target_game_id {
+                return None;
+            }
+        }
+
         Some(PlayerSummary {
             steam_id,
             persona_name: self.personaname.into_owned(),
@@ -152,8 +159,12 @@ pub fn friend_list_url(key: &str, steam_id: u64) -> String {
 // JSON parsing helpers (pure, unit-testable without a network).
 // ---------------------------------------------------------------------------
 
-/// Parse a GetPlayerSummaries response body into player summaries.
-pub fn parse_player_summaries(json: &str) -> anyhow::Result<Vec<PlayerSummary>> {
+/// Parse in-game player summaries, optionally retaining only the given game ID.
+/// Offline rows and rows with unparseable IDs are skipped.
+pub fn parse_player_summaries(
+    json: &str,
+    filter_game_id: Option<u32>,
+) -> anyhow::Result<Vec<PlayerSummary>> {
     // ⚡ Bolt optimization: Use zero-copy deserialization where possible for the player summaries API response.
     // By borrowing `&str` from the raw JSON (using `Cow`) for fields like `steamid`, `gameid`, `lobbysteamid`,
     // and `gameserverip` that only get parsed or cloned later, we reduce intermediate heap allocations during
@@ -163,7 +174,7 @@ pub fn parse_player_summaries(json: &str) -> anyhow::Result<Vec<PlayerSummary>> 
         .response
         .players
         .into_iter()
-        .filter_map(RawPlayerSummary::into_summary)
+        .filter_map(|p| p.into_summary(filter_game_id))
         .collect())
 }
 
@@ -241,7 +252,7 @@ mod tests {
             {"steamid":"76561198000000000","personaname":"Foo","gameid":"440","gameextrainfo":"Team Fortress 2","lobbysteamid":"109775241716070123","gameserverip":"192.168.1.1:27015","gamedir":"tf"},
             {"steamid":"76561198000000001","personaname":"Bar"}
         ]}}"#;
-        let rows = parse_player_summaries(json).expect("valid payload");
+        let rows = parse_player_summaries(json, None).expect("valid payload");
         assert_eq!(rows.len(), 1);
         assert_eq!(
             rows[0],
@@ -259,13 +270,13 @@ mod tests {
 
     #[test]
     fn parse_player_summaries_empty_players() {
-        let rows = parse_player_summaries(r#"{"response":{"players":[]}}"#).expect("valid");
+        let rows = parse_player_summaries(r#"{"response":{"players":[]}}"#, None).expect("valid");
         assert!(rows.is_empty());
     }
 
     #[test]
     fn parse_player_summaries_garbage_is_error() {
-        assert!(parse_player_summaries("not json").is_err());
+        assert!(parse_player_summaries("not json", None).is_err());
     }
 
     #[test]
@@ -274,9 +285,21 @@ mod tests {
             {"steamid":"not-a-number","personaname":"Broken","gameid":"440"},
             {"steamid":"76561198000000001","personaname":"Good","gameid":"440"}
         ]}}"#;
-        let rows = parse_player_summaries(json).expect("valid payload");
+        let rows = parse_player_summaries(json, None).expect("valid payload");
         assert_eq!(rows.len(), 1);
         assert_eq!(rows[0].steam_id, 76561198000000001);
+    }
+
+    #[test]
+    fn parse_player_summaries_filters_by_game_id() {
+        let json = r#"{"response":{"players":[
+            {"steamid":"76561198000000000","personaname":"TF2 Player","gameid":"440","gameextrainfo":"Team Fortress 2"},
+            {"steamid":"76561198000000001","personaname":"CS2 Player","gameid":"730","gameextrainfo":"Counter-Strike 2"}
+        ]}}"#;
+        let rows = parse_player_summaries(json, Some(440)).expect("valid payload");
+        assert_eq!(rows.len(), 1);
+        assert_eq!(rows[0].persona_name, "TF2 Player");
+        assert_eq!(rows[0].game_id, 440);
     }
 
     #[test]

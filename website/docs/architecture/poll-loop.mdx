@@ -19,7 +19,7 @@ execution order.
 ```rust title="src/main.rs (abridged)"
 let client   = SteamClient::new(config.api_key.clone());
 let mut a2s  = A2sClient::new();
-let mut tracker = Tracker::new(storage::read_log(&config.output_file).unwrap_or_default());
+let mut tracker = Tracker::with_missed_tolerance(storage::read_log(&config.output_file).unwrap_or_default(), config.missed_poll_tolerance);
 let interval = Duration::from_secs(config.poll_interval_secs.max(5));
 
 let (tx, rx) = mpsc::channel::<()>();
@@ -43,8 +43,8 @@ flowchart TD
   S["loop head"] --> T{"rx.try_recv() — Ctrl+C pending?"}
   T -->|yes| X["break"]
   T -->|no| P["client.current_game(steam_id)"]
-  P -->|"Ok(Some(game))"| U["tracker.update(&game, now())"]
-  P -->|"Ok(None)"| E["tracker.end_active(now())"]
+  P -->|"Ok(Some(game))"| U["tracker.observe(Some(&game), now)"]
+  P -->|"Ok(None)"| E["tracker.observe(None, now)"]
   P -->|"Err(e)"| L["eprintln! poll error — state untouched"]
   U --> C{"config.enrich?"}
   C -->|yes| A["enrich::analyze(...)"]
@@ -52,7 +52,7 @@ flowchart TD
   I -->|"Some(idx)"| M["tracker.apply_meta(idx, …)"]
   I -->|None| W
   C -->|no| W
-  M --> W["storage::write_log(path, tracker.log())"]
+  M --> W["write log if state or metadata changed"]
   E --> W
   L --> W
   W --> Z["rx.recv_timeout(interval) — sleep or wake on Ctrl+C"]
@@ -78,12 +78,11 @@ request for a single SteamID and maps the row through
 
 ### 3. Update the state machine
 
-`tracker.update(&game, &now())` returns `Started(i)` or `Running(i)` and
-handles game switches; `tracker.end_active(&now())` closes an open session.
-Full rules in [Session lifecycle](./session-lifecycle.mdx).
-
-The timestamp is computed in `main` (`now()`), not inside the tracker, so the
-state machine stays pure and testable.
+`tracker.observe(Some(&game), now)` starts, continues or switches a session.
+`tracker.observe(None, now)` tolerates the configured number of consecutive
+misses before ending an active session. Errors do not count as misses. The
+timestamp function is called only on a transition. Full rules in
+[Session lifecycle](./session-lifecycle.mdx).
 
 ### 4. Enrich (optional)
 
@@ -95,10 +94,7 @@ reported as `enrichment failed: …`.
 
 ### 5. Persist
 
-`storage::write_log(&config.output_file, tracker.log())` serialises the whole
-log and renames it into place. A write failure prints `failed to save log: …`
-and the loop continues — the in-memory log is still correct and the next tick
-retries.
+When a session or enrichment changes, `storage::write_log(&config.output_file, tracker.log())` serialises the whole log and renames it into place. A write failure is reported; another write is attempted on the next change or shutdown.
 
 ### 6. Sleep — interruptibly
 
@@ -134,7 +130,7 @@ resume it.
 | `GetFriendList` | 1 | Only when `enrich = true` and you are in a game. |
 | `GetPlayerSummaries` (friends) | `ceil(friends / 100)` | Steam caps 100 SteamIDs per request; `SteamClient::summaries` chunks automatically. |
 | A2S_INFO UDP round trip | 0–2 packets | Only when Steam reports a `gameserverip`; a challenge reply costs one extra exchange. |
-| Log file rewrite | 1 | Whole file, pretty-printed. |
+| Log file rewrite | 0–1 | On changes; whole file, pretty-printed. |
 
 With the default 30-second interval, 200 friends and a game running all day,
 that is roughly `2 880 × (1 + 1 + 2) ≈ 11 520` Steam API calls per day —

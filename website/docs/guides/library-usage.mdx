@@ -93,19 +93,19 @@ use steamlogger::tracker::{SessionEvent, Tracker};
 
 let mut tracker = Tracker::new(GameLog::default());
 
-match tracker.update(&game, &timestamp) {
+match tracker.update(&game, || timestamp.clone()) {
     SessionEvent::Started(i) => notify(&format!("started {}", tracker.log().games[i].name)),
     SessionEvent::Running(_) => {}
     _ => unreachable!("update never returns Ended/Idle"),
 }
 
 // later, when the player stops
-if tracker.end_active(&timestamp) == SessionEvent::Ended {
+if tracker.end_active(|| timestamp.clone()) == SessionEvent::Ended {
     notify("session over");
 }
 ```
 
-Because `update`/`end_active` take the timestamp as a `&str`, tests and
+Because `update`/`end_active` take a lazy function returning the timestamp, tests and
 replays can use any format — the crate's own tests use `"T0"`, `"T1"`, …
 
 ## A custom poll loop
@@ -128,7 +128,7 @@ fn main() -> anyhow::Result<()> {
         let now = chrono::Local::now().to_rfc3339();
         match client.current_game(cfg.steam_id) {
             Ok(Some(game)) => {
-                if let SessionEvent::Started(i) = tracker.update(&game, &now) {
+                if let SessionEvent::Started(i) = tracker.update(&game, || now.clone()) {
                     println!("▶ started {}", tracker.log().games[i].name);
                 }
                 let info = enrich::analyze(&client, &mut a2s, cfg.steam_id, &game);
@@ -143,7 +143,7 @@ fn main() -> anyhow::Result<()> {
                 }
             }
             Ok(None) => {
-                if tracker.end_active(&now) == SessionEvent::Ended {
+                if tracker.end_active(|| now.clone()) == SessionEvent::Ended {
                     println!("■ session ended");
                 }
             }
@@ -163,7 +163,7 @@ fixtures, replays or tests:
 ```rust
 use steamlogger::steam::api::{parse_friends, parse_player_summaries, summary_to_current_game};
 
-let summaries = parse_player_summaries(include_str!("fixtures/player_summaries.json"))?;
+let summaries = parse_player_summaries(include_str!("fixtures/player_summaries.json"), None)?;
 let friends   = parse_friends(include_str!("fixtures/friends.json"))?;
 let game      = summary_to_current_game(&summaries[0]).expect("in game");
 

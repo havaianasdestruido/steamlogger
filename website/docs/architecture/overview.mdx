@@ -126,27 +126,27 @@ sequenceDiagram
     Loop->>Client: current_game(steam_id)
     Client->>Api: player_summaries_url(key, [id])
     Client->>Client: HTTP GET (blocking, 10 s timeout)
-    Client->>Api: parse_player_summaries(body)
+    Client->>Api: parse_player_summaries(body, None)
     Api->>Api: summary_to_current_game(row)
     Client-->>Loop: Option of CurrentGame
 
     alt in game
-        Loop->>Track: update(&game, now)
+        Loop->>Track: observe(Some(&game), now)
         Track-->>Loop: Started(i) | Running(i)
         opt enrich enabled
             Loop->>Enr: analyze(client, a2s, me, game)
             Enr->>Client: friends(me) → list of Friend
-            Enr->>Client: summaries(ids) → list of PlayerSummary
+            Enr->>Client: summaries(ids, Some(app_id)) → list of PlayerSummary
             Enr->>A2s: query(gameserver_ip)
             A2s-->>Enr: ServerInfo { name, map }
             Enr-->>Loop: Enrichment
             Loop->>Track: apply_meta(i, map, server, friends…)
         end
     else not in game
-        Loop->>Track: end_active(now)
+        Loop->>Track: observe(None, now)
     end
 
-    Loop->>Store: write_log(path, tracker.log())
+    Loop->>Store: write_log if state or metadata changed
     Store->>Store: write *.tmp → rename
 ```
 
