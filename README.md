@@ -67,10 +67,10 @@ seconds to watch the configured player's currently-running game:
 
 Every detection source degrades gracefully: if the API is down, enrichment is
 skipped and the base `name`/`start`/`end` session log is still written. Brief
-missing current-game reports are ignored until `missed_poll_tolerance`
-consecutive empty polls occur, which avoids fragmented or missing-looking logs
+missing current-game reports are ignored for up to `missed_poll_tolerance`
+consecutive empty polls; the next missing poll ends the session, which avoids fragmented or missing-looking logs
 when Steam briefly omits status data. The log
-is saved atomically (temp file + rename) on every poll, so a crash never
+is saved atomically (temp file + rename) when the session or enrichment changes and at shutdown, so a crash never
 corrupts it. If the app is restarted mid-game, the open session is resumed from
 `end: null` on the last entry.
 

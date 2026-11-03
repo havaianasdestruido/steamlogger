@@ -67,7 +67,7 @@ Collect all enrichment for a running game. Never returns an error.
 ```rust
 let Ok(friends) = client.friends(me) else { return Enrichment::default(); };
 let ids: Vec<u64> = friends.iter().map(|f| f.steam_id).collect();
-let Ok(summaries) = client.summaries(&ids) else { return Enrichment::default(); };
+let Ok(summaries) = client.summaries(&ids, Some(game.app_id)) else { return Enrichment::default(); };
 let (server, map) = server_and_map(a2s, game);
 build(&summaries, game, map, server)
 ```
@@ -75,7 +75,7 @@ build(&summaries, game, map, server)
 | Step | Call | On failure |
 | --- | --- | --- |
 | 1 | `client.friends(me)` — `GetFriendList` | return `Enrichment::default()` |
-| 2 | `client.summaries(&ids)` — batched `GetPlayerSummaries` | return `Enrichment::default()` |
+| 2 | `client.summaries(&ids, Some(game.app_id))` — batched `GetPlayerSummaries` | return `Enrichment::default()` |
 | 3 | `server_and_map(a2s, game)` | `(None, None)`, other fields kept |
 | 4 | `build(...)` | — |
 

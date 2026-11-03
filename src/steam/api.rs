@@ -159,7 +159,8 @@ pub fn friend_list_url(key: &str, steam_id: u64) -> String {
 // JSON parsing helpers (pure, unit-testable without a network).
 // ---------------------------------------------------------------------------
 
-/// Parse a GetPlayerSummaries response body into player summaries.
+/// Parse in-game player summaries, optionally retaining only the given game ID.
+/// Offline rows and rows with unparseable IDs are skipped.
 pub fn parse_player_summaries(
     json: &str,
     filter_game_id: Option<u32>,

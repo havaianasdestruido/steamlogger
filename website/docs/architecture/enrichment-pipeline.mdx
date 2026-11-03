@@ -37,7 +37,7 @@ flowchart TB
 pub fn analyze(client: &SteamClient, a2s: &mut A2sClient, me: u64, game: &CurrentGame) -> Enrichment {
     let Ok(friends) = client.friends(me) else { return Enrichment::default(); };
     let ids: Vec<u64> = friends.iter().map(|f| f.steam_id).collect();
-    let Ok(summaries) = client.summaries(&ids) else { return Enrichment::default(); };
+    let Ok(summaries) = client.summaries(&ids, Some(game.app_id)) else { return Enrichment::default(); };
     let (server, map) = server_and_map(a2s, game);
     build(&summaries, game, map, server)
 }

@@ -115,7 +115,7 @@ not a timeline.
 An entry is closed (gains `end`) in exactly two situations, both handled by
 [`Tracker`](./reference/tracker.mdx):
 
-1. A poll reports **no game running** → `end_active()` stamps `end`.
+1. Consecutive polls report **no game running** beyond the configured tolerance → `observe()` stamps `end`.
 2. A poll reports a **different game** → the old entry is closed with the same
    timestamp used as the new entry's `start`, so sessions never overlap.
 

@@ -116,18 +116,18 @@ appear. Make the friend list public if you want that data.
 ### `SteamClient::summaries` {/* #summaries */}
 
 ```rust
-pub fn summaries(&self, ids: &[u64]) -> anyhow::Result<Vec<PlayerSummary>>
+pub fn summaries(&self, ids: &[u64], filter_game_id: Option<u32>) -> anyhow::Result<Vec<PlayerSummary>>
 ```
 
 Player summaries for any number of ids, chunked at Steam's **100 ids per
-request** limit and concatenated in order.
+request** limit and concatenated in order. `Some(app_id)` retains only that game; `None` returns all valid in-game summaries.
 
 ```rust
-let mut out = Vec::with_capacity(ids.len());
-for chunk in chunks(ids) {
+let mut out = Vec::new();
+for chunk in ids.chunks(100) {
     let url = player_summaries_url(&self.key, chunk);
     let body = self.get_text(url, "player summaries")?;
-    out.extend(parse_player_summaries(&body)?);
+    out.extend(parse_player_summaries(&body, filter_game_id)?);
 }
 Ok(out)
 ```

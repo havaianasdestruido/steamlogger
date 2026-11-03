@@ -88,6 +88,16 @@ fn parse_player_summaries_fixture() {
 }
 
 #[test]
+fn summary_filter_keeps_only_matching_game_from_fixture() {
+    let json = include_str!("fixtures/player_summaries.json");
+    let all = api::parse_player_summaries(json, None).expect("parse fixture");
+    let tf2 = api::parse_player_summaries(json, Some(440)).expect("parse fixture");
+    assert_eq!(tf2, all.into_iter().filter(|p| p.game_id == 440).collect::<Vec<_>>());
+    assert_eq!(tf2.len(), 2);
+    assert!(api::parse_player_summaries(json, Some(999)).unwrap().is_empty());
+}
+
+#[test]
 fn summary_to_current_game_fixture() {
     let json = include_str!("fixtures/player_summaries.json");
     let summaries = api::parse_player_summaries(json, None).expect("parse fixture");

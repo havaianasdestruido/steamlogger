@@ -56,7 +56,7 @@ The poll loop. Builds the clients, restores previous state, installs the
 ```rust
 let client = SteamClient::new(config.api_key.clone());
 let mut a2s = A2sClient::new();
-let mut tracker = Tracker::new(storage::read_log(&config.output_file).unwrap_or_default());
+let mut tracker = Tracker::with_missed_tolerance(storage::read_log(&config.output_file).unwrap_or_default(), config.missed_poll_tolerance);
 let interval = Duration::from_secs(config.poll_interval_secs.max(5));
 ```
 
@@ -75,9 +75,9 @@ If `ctrlc::set_handler` fails, `run` prints `failed to install Ctrl+C handler:
 
 1. `rx.try_recv()` — break out if a shutdown signal is already queued.
 2. `client.current_game(config.steam_id)`:
-   - `Ok(Some(game))` → `tracker.update(&game, &now())`, then enrichment when
+   - `Ok(Some(game))` → `tracker.observe(Some(&game), now)`, then enrichment when
      `config.enrich` is true.
-   - `Ok(None)` → `tracker.end_active(&now())`.
+   - `Ok(None)` → `tracker.observe(None, now)` (ends only after the configured tolerance is exceeded).
    - `Err(e)` → `eprintln!("poll error: {e}")`, no state change.
 3. Enrichment (only with an active index):
    ```rust
@@ -89,7 +89,7 @@ If `ctrlc::set_handler` fails, `run` prints `failed to install Ctrl+C handler:
        }
    }
    ```
-4. `storage::write_log(&config.output_file, tracker.log())`; failures print
+4. On a session transition or enrichment change, `storage::write_log(&config.output_file, tracker.log())`; failures print
    `failed to save log: {e}` and are otherwise ignored.
 5. `rx.recv_timeout(interval)` — an interruptible sleep.
 
@@ -103,11 +103,8 @@ println!("stopped");
 ExitCode::SUCCESS
 ```
 
-:::note The `SessionEvent` return values are discarded
-Both `tracker.update(...)` and `tracker.end_active(...)` are bound to
-`let _event = …`. The binary does not react to transitions; the values exist
-for testability and for library consumers.
-:::
+The event determines whether session changes require a log write. Tolerated misses and idle ticks do not trigger writes.
+
 
 ### `now` {/* #now */}
 
@@ -125,7 +122,7 @@ chrono::Local::now().to_rfc3339_opts(chrono::SecondsFormat::Secs, false)
 - Second precision (`SecondsFormat::Secs`).
 - `use_z = false`, so UTC renders as `+00:00` rather than `Z`.
 
-Passing the timestamp as a `&str` into the tracker is what keeps
+Passing the timestamp as a lazy function into the tracker is what keeps
 [`tracker`](./tracker.mdx) free of time dependencies and trivially testable
 with values like `"T0"`.
 

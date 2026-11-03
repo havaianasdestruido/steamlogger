@@ -46,7 +46,7 @@ impl SteamClient {
     }
 
     /// Player summaries for up to 100 ids. Chunks larger inputs internally
-    /// and merges results.
+    /// and merges results. If set, `filter_game_id` retains only that game.
     pub fn summaries(
         &self,
         ids: &[u64],
