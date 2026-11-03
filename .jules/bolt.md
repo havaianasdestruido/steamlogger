@@ -37,3 +37,7 @@
 ## 2025-02-12 - [Eliminated heap allocations in A2S UDP packet handling]
 **Learning:** UDP communication in the A2S client frequently triggers heap allocations by using `Vec<u8>` for constructing short request payloads and copying received buffers.
 **Action:** Always prefer using stack-allocated buffers (e.g., `[u8; 16]`) to construct short payloads and return slices or byte counts when interacting with sockets to eliminate unnecessary `Vec` allocations.
+
+## 2023-10-27 - Filter during deserialization to avoid string allocation
+**Learning:** When fetching large lists of objects (like Steam player summaries) where only a subset will be used based on a simple field match (like `game_id`), filtering the objects *before* calling `into_owned()` on string `Cow`s drastically reduces unnecessary heap allocations.
+**Action:** When working with serde-borrowed strings (`Cow<'a, str>`), look for opportunities to apply business logic filters in the conversion function (e.g., `into_summary()`) rather than waiting for the entire collection to be fully deserialized and owned.

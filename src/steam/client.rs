@@ -34,7 +34,7 @@ impl SteamClient {
     pub fn current_game(&self, steam_id: u64) -> anyhow::Result<Option<CurrentGame>> {
         let url = player_summaries_url(&self.key, &[steam_id]);
         let body = self.get_text(url, "player summaries")?;
-        let summaries = parse_player_summaries(&body)?;
+        let summaries = parse_player_summaries(&body, None)?;
         Ok(summaries.first().map(summary_to_current_game))
     }
 
@@ -47,14 +47,18 @@ impl SteamClient {
 
     /// Player summaries for up to 100 ids. Chunks larger inputs internally
     /// and merges results.
-    pub fn summaries(&self, ids: &[u64]) -> anyhow::Result<Vec<PlayerSummary>> {
-        let mut out = Vec::with_capacity(ids.len());
+    pub fn summaries(
+        &self,
+        ids: &[u64],
+        filter_game_id: Option<u32>,
+    ) -> anyhow::Result<Vec<PlayerSummary>> {
+        let mut out = Vec::new();
         // ⚡ Bolt optimization: Use standard `ids.chunks(100)` iterator instead of
         // collecting into an intermediate `Vec<&[u64]>` via custom chunking logic.
         for chunk in ids.chunks(100) {
             let url = player_summaries_url(&self.key, chunk);
             let body = self.get_text(url, "player summaries")?;
-            out.extend(parse_player_summaries(&body)?);
+            out.extend(parse_player_summaries(&body, filter_game_id)?);
         }
         Ok(out)
     }

@@ -71,7 +71,7 @@ pub fn analyze(
         return Enrichment::default();
     };
     // ⚡ Bolt optimization: `friends` is already a `Vec<u64>`, so we can pass it directly.
-    let Ok(summaries) = client.summaries(&friends) else {
+    let Ok(summaries) = client.summaries(&friends, Some(game.app_id)) else {
         return Enrichment::default();
     };
     let (server, map) = server_and_map(a2s, game);
