@@ -14,6 +14,10 @@ steam_id = 76561198000000000
 # Seconds between polls of the Steam API. Optional, defaults to 30.
 poll_interval_secs = 30
 
+# Consecutive polls with no current game to tolerate before ending a session.
+# Steam can briefly omit current-game data; default 2 avoids fragmented logs.
+missed_poll_tolerance = 2
+
 # Path of the JSON log file written by the app. Optional, defaults to "steamlog.json".
 output_file = "steamlog.json"
 

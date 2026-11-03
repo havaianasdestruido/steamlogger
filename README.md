@@ -66,7 +66,10 @@ seconds to watch the configured player's currently-running game:
   query to the game server returns its display name and current map.
 
 Every detection source degrades gracefully: if the API is down, enrichment is
-skipped and the base `name`/`start`/`end` session log is still written. The log
+skipped and the base `name`/`start`/`end` session log is still written. Brief
+missing current-game reports are ignored until `missed_poll_tolerance`
+consecutive empty polls occur, which avoids fragmented or missing-looking logs
+when Steam briefly omits status data. The log
 is saved atomically (temp file + rename) on every poll, so a crash never
 corrupts it. If the app is restarted mid-game, the open session is resumed from
 `end: null` on the last entry.
@@ -96,6 +99,7 @@ Edit `steamlogger.toml`:
 api_key = "YOUR_STEAM_API_KEY"        # required (or env STEAMLOGGER_API_KEY)
 steam_id = 76561198000000000          # required (or env STEAMLOGGER_STEAM_ID)
 poll_interval_secs = 30               # default 30
+missed_poll_tolerance = 2             # default 2
 output_file = "steamlog.json"         # default steamlog.json
 enrich = true                          # default true
 ```

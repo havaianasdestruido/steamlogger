@@ -21,15 +21,26 @@ pub enum SessionEvent {
 pub struct Tracker {
     log: GameLog,
     active_index: Option<usize>,
+    missed_observations: u32,
+    max_missed_observations: u32,
 }
 
 impl Tracker {
     pub fn new(log: GameLog) -> Self {
+        Self::with_missed_tolerance(log, 0)
+    }
+
+    pub fn with_missed_tolerance(log: GameLog, max_missed_observations: u32) -> Self {
         let active_index = log.games.last().and_then(|last| match last.end {
             Some(_) => None,
             None => log.games.len().checked_sub(1),
         });
-        Self { log, active_index }
+        Self {
+            log,
+            active_index,
+            missed_observations: 0,
+            max_missed_observations,
+        }
     }
 
     pub fn into_log(self) -> GameLog {
@@ -44,14 +55,38 @@ impl Tracker {
         self.active_index
     }
 
+    /// Feed one poll result. A missing observation is tolerated for
+    /// `max_missed_observations` consecutive polls before the active session is
+    /// closed. Steam can briefly omit current-game data during API hiccups or
+    /// status transitions, and closing immediately would make logging look
+    /// intermittent.
+    pub fn observe(&mut self, game: Option<&CurrentGame>, now: impl FnOnce() -> String) -> SessionEvent {
+        match game {
+            Some(game) => {
+                self.missed_observations = 0;
+                self.update(game, now)
+            }
+            None => match self.active_index {
+                Some(index) if self.missed_observations < self.max_missed_observations => {
+                    self.missed_observations += 1;
+                    SessionEvent::Running(index)
+                }
+                Some(_) => {
+                    self.missed_observations = 0;
+                    self.end_active(now)
+                }
+                None => SessionEvent::Idle,
+            },
+        }
+    }
+
     /// Feed the currently-observed game. Handles start/continue/switch:
     /// - no active + game -> push new entry, `Started`
     /// - active + same game -> `Running`
     /// - active + different game -> close old, push new, `Started`
-    /// - active + none -> close old, `Ended`
     pub fn update(&mut self, game: &CurrentGame, now: impl FnOnce() -> String) -> SessionEvent {
-        // ⚡ Bolt optimization: `now` is lazily evaluated only when a state change occurs
-        // to avoid unconditional date formatting string allocations in the tight polling loop
+        self.missed_observations = 0;
+        // Keep timestamp generation lazy: continuing a session needs no allocation.
         match self.active_index {
             None => {
                 self.log.games.push(LogEntry::new(game.name.clone(), now()));
@@ -75,7 +110,7 @@ impl Tracker {
 
     /// Explicitly close the active session (used when the poll reports no game).
     pub fn end_active(&mut self, now: impl FnOnce() -> String) -> SessionEvent {
-        // ⚡ Bolt optimization: `now` is lazily evaluated only when closing a session
+        self.missed_observations = 0;
         match self.active_index {
             Some(index) => {
                 self.close_at(index, &now());
@@ -229,6 +264,63 @@ mod tests {
         assert_eq!(t.end_active(|| "T2".to_string()), SessionEvent::Ended);
         assert_eq!(t.log().games[0].end.as_deref(), Some("T2"));
         assert_eq!(t.active_index(), None);
+    }
+
+    #[test]
+    fn observe_tolerates_brief_missing_game_reports() {
+        let mut t = Tracker::with_missed_tolerance(GameLog::default(), 2);
+        assert_eq!(
+            t.observe(Some(&game("Dota 2")), || "T0".to_string()),
+            SessionEvent::Started(0)
+        );
+        assert_eq!(t.observe(None, || "T1".to_string()), SessionEvent::Running(0));
+        assert_eq!(t.observe(None, || "T2".to_string()), SessionEvent::Running(0));
+        assert_eq!(t.active_index(), Some(0));
+        assert!(t.log().games[0].end.is_none());
+
+        assert_eq!(t.observe(None, || "T3".to_string()), SessionEvent::Ended);
+        assert_eq!(t.active_index(), None);
+        assert_eq!(t.log().games[0].end.as_deref(), Some("T3"));
+    }
+
+    #[test]
+    fn observe_resets_miss_count_when_game_reappears() {
+        let mut t = Tracker::with_missed_tolerance(GameLog::default(), 1);
+        assert_eq!(
+            t.observe(Some(&game("Dota 2")), || "T0".to_string()),
+            SessionEvent::Started(0)
+        );
+        assert_eq!(t.observe(None, || "T1".to_string()), SessionEvent::Running(0));
+        assert_eq!(
+            t.observe(Some(&game("Dota 2")), || "T2".to_string()),
+            SessionEvent::Running(0)
+        );
+        assert_eq!(t.observe(None, || "T3".to_string()), SessionEvent::Running(0));
+        assert_eq!(t.active_index(), Some(0));
+    }
+
+    #[test]
+    fn observe_evaluates_time_only_on_transitions_and_resets_misses() {
+        let mut t = Tracker::with_missed_tolerance(GameLog::default(), 1);
+        assert_eq!(t.observe(None, || panic!("idle timestamp")), SessionEvent::Idle);
+        assert_eq!(t.observe(Some(&game("Dota 2")), || "T0".into()), SessionEvent::Started(0));
+        assert_eq!(t.observe(None, || panic!("tolerated timestamp")), SessionEvent::Running(0));
+        assert_eq!(t.update(&game("Dota 2"), || panic!("running timestamp")), SessionEvent::Running(0));
+        assert_eq!(t.observe(None, || panic!("reset timestamp")), SessionEvent::Running(0));
+        assert_eq!(t.observe(Some(&game("CS2")), || "T1".into()), SessionEvent::Started(1));
+        assert_eq!(t.log().games[0].end.as_deref(), Some("T1"));
+        assert_eq!(t.log().games[1].start, "T1");
+        assert_eq!(t.observe(None, || panic!("switch reset timestamp")), SessionEvent::Running(1));
+        assert_eq!(t.observe(None, || "T2".into()), SessionEvent::Ended);
+        assert_eq!(t.log().games[1].end.as_deref(), Some("T2"));
+        assert_eq!(t.end_active(|| panic!("idle timestamp")), SessionEvent::Idle);
+    }
+
+    #[test]
+    fn new_tracker_does_not_tolerate_missing_observations() {
+        let mut t = Tracker::new(GameLog::default());
+        t.observe(Some(&game("Dota 2")), || "T0".into());
+        assert_eq!(t.observe(None, || "T1".into()), SessionEvent::Ended);
     }
 
     #[test]
