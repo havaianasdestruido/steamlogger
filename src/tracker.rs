@@ -60,7 +60,11 @@ impl Tracker {
     /// closed. Steam can briefly omit current-game data during API hiccups or
     /// status transitions, and closing immediately would make logging look
     /// intermittent.
-    pub fn observe(&mut self, game: Option<&CurrentGame>, now: impl FnOnce() -> String) -> SessionEvent {
+    pub fn observe(
+        &mut self,
+        game: Option<&CurrentGame>,
+        now: impl FnOnce() -> String,
+    ) -> SessionEvent {
         match game {
             Some(game) => {
                 self.missed_observations = 0;
@@ -273,8 +277,14 @@ mod tests {
             t.observe(Some(&game("Dota 2")), || "T0".to_string()),
             SessionEvent::Started(0)
         );
-        assert_eq!(t.observe(None, || "T1".to_string()), SessionEvent::Running(0));
-        assert_eq!(t.observe(None, || "T2".to_string()), SessionEvent::Running(0));
+        assert_eq!(
+            t.observe(None, || "T1".to_string()),
+            SessionEvent::Running(0)
+        );
+        assert_eq!(
+            t.observe(None, || "T2".to_string()),
+            SessionEvent::Running(0)
+        );
         assert_eq!(t.active_index(), Some(0));
         assert!(t.log().games[0].end.is_none());
 
@@ -290,30 +300,60 @@ mod tests {
             t.observe(Some(&game("Dota 2")), || "T0".to_string()),
             SessionEvent::Started(0)
         );
-        assert_eq!(t.observe(None, || "T1".to_string()), SessionEvent::Running(0));
+        assert_eq!(
+            t.observe(None, || "T1".to_string()),
+            SessionEvent::Running(0)
+        );
         assert_eq!(
             t.observe(Some(&game("Dota 2")), || "T2".to_string()),
             SessionEvent::Running(0)
         );
-        assert_eq!(t.observe(None, || "T3".to_string()), SessionEvent::Running(0));
+        assert_eq!(
+            t.observe(None, || "T3".to_string()),
+            SessionEvent::Running(0)
+        );
         assert_eq!(t.active_index(), Some(0));
     }
 
     #[test]
     fn observe_evaluates_time_only_on_transitions_and_resets_misses() {
         let mut t = Tracker::with_missed_tolerance(GameLog::default(), 1);
-        assert_eq!(t.observe(None, || panic!("idle timestamp")), SessionEvent::Idle);
-        assert_eq!(t.observe(Some(&game("Dota 2")), || "T0".into()), SessionEvent::Started(0));
-        assert_eq!(t.observe(None, || panic!("tolerated timestamp")), SessionEvent::Running(0));
-        assert_eq!(t.update(&game("Dota 2"), || panic!("running timestamp")), SessionEvent::Running(0));
-        assert_eq!(t.observe(None, || panic!("reset timestamp")), SessionEvent::Running(0));
-        assert_eq!(t.observe(Some(&game("CS2")), || "T1".into()), SessionEvent::Started(1));
+        assert_eq!(
+            t.observe(None, || panic!("idle timestamp")),
+            SessionEvent::Idle
+        );
+        assert_eq!(
+            t.observe(Some(&game("Dota 2")), || "T0".into()),
+            SessionEvent::Started(0)
+        );
+        assert_eq!(
+            t.observe(None, || panic!("tolerated timestamp")),
+            SessionEvent::Running(0)
+        );
+        assert_eq!(
+            t.update(&game("Dota 2"), || panic!("running timestamp")),
+            SessionEvent::Running(0)
+        );
+        assert_eq!(
+            t.observe(None, || panic!("reset timestamp")),
+            SessionEvent::Running(0)
+        );
+        assert_eq!(
+            t.observe(Some(&game("CS2")), || "T1".into()),
+            SessionEvent::Started(1)
+        );
         assert_eq!(t.log().games[0].end.as_deref(), Some("T1"));
         assert_eq!(t.log().games[1].start, "T1");
-        assert_eq!(t.observe(None, || panic!("switch reset timestamp")), SessionEvent::Running(1));
+        assert_eq!(
+            t.observe(None, || panic!("switch reset timestamp")),
+            SessionEvent::Running(1)
+        );
         assert_eq!(t.observe(None, || "T2".into()), SessionEvent::Ended);
         assert_eq!(t.log().games[1].end.as_deref(), Some("T2"));
-        assert_eq!(t.end_active(|| panic!("idle timestamp")), SessionEvent::Idle);
+        assert_eq!(
+            t.end_active(|| panic!("idle timestamp")),
+            SessionEvent::Idle
+        );
     }
 
     #[test]

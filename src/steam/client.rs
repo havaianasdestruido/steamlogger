@@ -1,4 +1,6 @@
-use std::time::Duration;
+use std::collections::HashMap;
+use std::sync::Mutex;
+use std::time::{Duration, Instant};
 
 use anyhow::Context;
 
@@ -14,6 +16,7 @@ use crate::steam::api::{
 pub struct SteamClient {
     key: String,
     http: reqwest::blocking::Client,
+    friends_cache: Mutex<HashMap<u64, (Instant, Vec<u64>)>>,
 }
 
 impl SteamClient {
@@ -27,7 +30,11 @@ impl SteamClient {
             .user_agent("SteamLogger/0.1 (github.com/steamlogger)")
             .build()
             .expect("failed to build HTTP client");
-        Self { key, http }
+        Self {
+            key,
+            http,
+            friends_cache: Mutex::new(HashMap::new()),
+        }
     }
 
     /// Current game of `steam_id`, `None` when not in-game.
@@ -40,9 +47,20 @@ impl SteamClient {
 
     /// Friend list (relationship == "friend").
     pub fn friends(&self, steam_id: u64) -> anyhow::Result<Vec<u64>> {
+        if let Ok(cache) = self.friends_cache.lock() {
+            if let Some((time, friends)) = cache.get(&steam_id) {
+                if time.elapsed() < Duration::from_secs(300) {
+                    return Ok(friends.clone());
+                }
+            }
+        }
         let url = friend_list_url(&self.key, steam_id);
         let body = self.get_text(url, "friend list")?;
-        parse_friends(&body)
+        let friends = parse_friends(&body)?;
+        if let Ok(mut cache) = self.friends_cache.lock() {
+            cache.insert(steam_id, (Instant::now(), friends.clone()));
+        }
+        Ok(friends)
     }
 
     /// Player summaries for up to 100 ids. Chunks larger inputs internally
