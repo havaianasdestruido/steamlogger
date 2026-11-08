@@ -16,7 +16,7 @@ use crate::steam::api::{
 pub struct SteamClient {
     key: String,
     http: reqwest::blocking::Client,
-    friends_cache: Mutex<HashMap<u64, (Instant, Vec<u64>)>>,
+    friends_cache: Mutex<HashMap<u64, (Instant, std::sync::Arc<[u64]>)>>,
 }
 
 impl SteamClient {
@@ -46,19 +46,19 @@ impl SteamClient {
     }
 
     /// Friend list (relationship == "friend").
-    pub fn friends(&self, steam_id: u64) -> anyhow::Result<Vec<u64>> {
+    pub fn friends(&self, steam_id: u64) -> anyhow::Result<std::sync::Arc<[u64]>> {
         if let Ok(cache) = self.friends_cache.lock() {
             if let Some((time, friends)) = cache.get(&steam_id) {
                 if time.elapsed() < Duration::from_secs(300) {
-                    return Ok(friends.clone());
+                    return Ok(std::sync::Arc::clone(friends));
                 }
             }
         }
         let url = friend_list_url(&self.key, steam_id);
         let body = self.get_text(url, "friend list")?;
-        let friends = parse_friends(&body)?;
+        let friends: std::sync::Arc<[u64]> = parse_friends(&body)?.into();
         if let Ok(mut cache) = self.friends_cache.lock() {
-            cache.insert(steam_id, (Instant::now(), friends.clone()));
+            cache.insert(steam_id, (Instant::now(), std::sync::Arc::clone(&friends)));
         }
         Ok(friends)
     }

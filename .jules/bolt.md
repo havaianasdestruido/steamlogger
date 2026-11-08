@@ -41,3 +41,7 @@
 ## 2023-10-27 - Filter during deserialization to avoid string allocation
 **Learning:** When fetching large lists of objects (like Steam player summaries) where only a subset will be used based on a simple field match (like `game_id`), filtering the objects *before* calling `into_owned()` on string `Cow`s drastically reduces unnecessary heap allocations.
 **Action:** When working with serde-borrowed strings (`Cow<'a, str>`), look for opportunities to apply business logic filters in the conversion function (e.g., `into_summary()`) rather than waiting for the entire collection to be fully deserialized and owned.
+
+## 2025-02-12 - Arc instead of Vec cloning for caches
+**Learning:** Returning `Vec<T>` from a cache hit clones the entire vector, causing O(N) allocation overhead per poll tick. `std::sync::Arc<[T]>` eliminates this with cheap reference counting.
+**Action:** When caching heavily-shared, read-only slices, use `Arc<[T]>` to avoid O(N) allocations and cloning on cache hit.
