@@ -57,18 +57,21 @@ pub struct PlayerSummary {
 }
 
 /// Converts a player summary into a `CurrentGame` when the player is in-game.
-pub fn summary_to_current_game(summary: &PlayerSummary) -> CurrentGame {
+pub fn summary_to_current_game(summary: PlayerSummary) -> CurrentGame {
+    // ⚡ Bolt optimization: Take ownership of `PlayerSummary` instead of a reference.
+    // This allows us to move the existing heap-allocated strings into `CurrentGame`
+    // instead of cloning them, eliminating up to 4 unnecessary string allocations
+    // on every poll loop for the tracked player.
     let app_id = summary.game_id;
     let name = summary
         .game_extra_info
-        .clone()
         .unwrap_or_else(|| format!("App {app_id}"));
     CurrentGame {
         app_id,
         name,
-        gamedir: summary.gamedir.clone(),
-        lobby_steam_id: summary.lobby_steam_id.clone(),
-        gameserver_ip: summary.gameserver_ip.clone(),
+        gamedir: summary.gamedir,
+        lobby_steam_id: summary.lobby_steam_id,
+        gameserver_ip: summary.gameserver_ip,
     }
 }
 
@@ -217,7 +220,7 @@ mod tests {
             gamedir: Some("tf".into()),
             gameserver_ip: Some("192.168.1.1:27015".into()),
         };
-        let g = summary_to_current_game(&s);
+        let g = summary_to_current_game(s);
         assert_eq!(
             g,
             CurrentGame {
@@ -241,7 +244,7 @@ mod tests {
             gamedir: None,
             gameserver_ip: None,
         };
-        let g = summary_to_current_game(&s);
+        let g = summary_to_current_game(s);
         assert_eq!(g.app_id, 440);
         assert_eq!(g.name, "App 440");
     }

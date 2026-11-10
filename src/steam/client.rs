@@ -42,7 +42,7 @@ impl SteamClient {
         let url = player_summaries_url(&self.key, &[steam_id]);
         let body = self.get_text(url, "player summaries")?;
         let summaries = parse_player_summaries(&body, None)?;
-        Ok(summaries.first().map(summary_to_current_game))
+        Ok(summaries.into_iter().next().map(summary_to_current_game))
     }
 
     /// Friend list (relationship == "friend").

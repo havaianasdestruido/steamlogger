@@ -108,7 +108,7 @@ fn summary_filter_keeps_only_matching_game_from_fixture() {
 fn summary_to_current_game_fixture() {
     let json = include_str!("fixtures/player_summaries.json");
     let summaries = api::parse_player_summaries(json, None).expect("parse fixture");
-    let game = api::summary_to_current_game(&summaries[0]);
+    let game = api::summary_to_current_game(summaries.into_iter().next().unwrap());
     assert_eq!(
         game,
         api::CurrentGame {
@@ -132,7 +132,7 @@ fn parse_friends_fixture() {
 fn enrich_same_lobby_from_fixture() {
     let json = include_str!("fixtures/player_summaries.json");
     let summaries = api::parse_player_summaries(json, None).expect("parse fixture");
-    let game = api::summary_to_current_game(&summaries[0]);
+    let game = api::summary_to_current_game(summaries[0].clone());
     let friends: Vec<api::PlayerSummary> = summaries
         .into_iter()
         .filter(|s| s.steam_id != TRACKED_STEAM_ID)
