@@ -45,3 +45,7 @@
 ## 2025-02-12 - Arc instead of Vec cloning for caches
 **Learning:** Returning `Vec<T>` from a cache hit clones the entire vector, causing O(N) allocation overhead per poll tick. `std::sync::Arc<[T]>` eliminates this with cheap reference counting.
 **Action:** When caching heavily-shared, read-only slices, use `Arc<[T]>` to avoid O(N) allocations and cloning on cache hit.
+
+## 2025-02-12 - Eliminate unnecessary string cloning in game mapping
+**Learning:** `summary_to_current_game` took a reference to `PlayerSummary` and unconditionally cloned `game_extra_info`, `gamedir`, `lobby_steam_id`, and `gameserver_ip` strings to construct the `CurrentGame`. Since the original `PlayerSummary` row for the tracked player was immediately discarded after this call, these heap allocations and memcpys were completely wasted.
+**Action:** When converting a short-lived struct into another domain type, take ownership (`self` / pass by value) rather than a reference if the source object is no longer needed. This allows moving the inner heap-allocated data (like `String`s) directly into the new struct without cloning.
