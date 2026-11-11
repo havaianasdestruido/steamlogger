@@ -1,0 +1,157 @@
+name: Build
+
+on:
+  push:
+    branches: [main]
+    tags: ['v*']
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+jobs:
+  build:
+    name: Build (${{ matrix.label }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - label: Linux x86_64
+            artifact: steamlogger-linux-x86_64
+            kind: linux-x64
+            os: ubuntu-latest
+            target: x86_64-unknown-linux-gnu
+            rustup_target: x86_64-unknown-linux-gnu
+            toolchain: stable
+            bin: steamlogger
+            archive_ext: tar.gz
+
+          - label: Windows x64
+            artifact: steamlogger-windows-x64
+            kind: windows-x64
+            os: windows-latest
+            target: x86_64-pc-windows-msvc
+            rustup_target: x86_64-pc-windows-msvc
+            toolchain: stable
+            # Link the C runtime statically so the binary starts without the
+            # Visual C++ Redistributable installed.
+            rustflags: -C target-feature=+crt-static
+            bin: steamlogger.exe
+            archive_ext: zip
+
+          - label: Windows 7 x64
+            artifact: steamlogger-windows7-x64
+            kind: windows7-x64
+            os: windows-latest
+            # Rust 1.78+ raised x86_64-pc-windows-msvc's baseline to Windows 10.
+            # x86_64-win7-windows-msvc is a Tier 3 target built from rust-src via
+            # -Z build-std; +crt-static also embeds UCRT + vcruntime so clean
+            # Windows 7 SP1 machines need neither KB2999226 nor vcredist.
+            target: x86_64-win7-windows-msvc
+            toolchain: nightly
+            components: rust-src
+            build_std: true
+            rustflags: -C target-feature=+crt-static
+            bin: steamlogger.exe
+            archive_ext: zip
+    env:
+      RUSTFLAGS: ${{ matrix.rustflags }}
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: ${{ matrix.toolchain }}
+          targets: ${{ matrix.rustup_target }}
+          components: ${{ matrix.components }}
+
+      - name: Cache Cargo build
+        uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: ${{ matrix.artifact }}
+
+      - name: Build release binary
+        run: |
+          set -euo pipefail
+          if [[ "${{ matrix.build_std }}" == "true" ]]; then
+            cargo +"${{ matrix.toolchain }}" build -Z build-std --release --locked --target "${{ matrix.target }}"
+          else
+            cargo +"${{ matrix.toolchain }}" build --release --locked --target "${{ matrix.target }}"
+          fi
+
+      - name: Run target tests
+        run: |
+          set -euo pipefail
+          if [[ "${{ matrix.build_std }}" == "true" ]]; then
+            cargo +"${{ matrix.toolchain }}" test -Z build-std --release --locked --target "${{ matrix.target }}"
+          else
+            cargo +"${{ matrix.toolchain }}" test --release --locked --target "${{ matrix.target }}"
+          fi
+
+      - name: Verify binary, imports, and startup
+        run: |
+          set -euo pipefail
+          ${{ runner.os == 'Windows' && 'python' || 'python3' }} .github/scripts/verify-binary.py \
+            --kind "${{ matrix.kind }}" \
+            --smoke \
+            "target/${{ matrix.target }}/release/${{ matrix.bin }}"
+
+      - name: Package archive and checksum
+        run: |
+          set -euo pipefail
+          stage="dist/${{ matrix.artifact }}"
+          archive="${{ matrix.artifact }}.${{ matrix.archive_ext }}"
+          rm -rf dist
+          mkdir -p "$stage"
+
+          cp "target/${{ matrix.target }}/release/${{ matrix.bin }}" "$stage/${{ matrix.bin }}"
+          if [[ "${{ runner.os }}" != "Windows" ]]; then
+            chmod +x "$stage/${{ matrix.bin }}"
+          fi
+          cp steamlogger.example.toml LICENSE README.md "$stage/"
+
+          ${{ runner.os == 'Windows' && 'python' || 'python3' }} - "$stage" "dist/$archive" <<'PY'
+          import hashlib, pathlib, sys, tarfile, zipfile
+
+          stage = pathlib.Path(sys.argv[1])
+          archive = pathlib.Path(sys.argv[2])
+          files = sorted(p for p in stage.iterdir() if p.is_file())
+
+          if archive.name.endswith(".tar.gz"):
+              with tarfile.open(archive, "w:gz") as tf:
+                  for p in files:
+                      tf.add(p, arcname=f"{stage.name}/{p.name}")
+          elif archive.name.endswith(".zip"):
+              with zipfile.ZipFile(archive, "w", compression=zipfile.ZIP_DEFLATED) as zf:
+                  for p in files:
+                      zf.write(p, arcname=f"{stage.name}/{p.name}")
+          else:
+              raise SystemExit(f"unsupported archive format: {archive}")
+
+          digest = hashlib.sha256(archive.read_bytes()).hexdigest()
+          checksum_path = pathlib.Path(f"{archive}.sha256")
+          checksum_path.write_bytes(f"{digest}  {archive.name}\n".encode("ascii"))
+          print(f"Packaged {archive} ({archive.stat().st_size} bytes, sha256={digest})")
+          PY
+
+      - name: Upload build artifact
+        uses: actions/upload-artifact@v7
+        with:
+          name: ${{ matrix.artifact }}
+          if-no-files-found: error
+          path: |
+            dist/${{ matrix.artifact }}.${{ matrix.archive_ext }}
+            dist/${{ matrix.artifact }}.${{ matrix.archive_ext }}.sha256
